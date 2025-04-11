@@ -69,11 +69,57 @@ class GameGUI:
         # Memory management
         self.last_gc_time = 0
         self.text_cache = {}  # Cache for rendered text
+        self.player_name = ""  # Añade esta línea
     
     def setup_window(self):
         """Set up the game window."""
         self.screen = pygame.display.set_mode((self.width, self.height))
         pygame.display.set_caption("Memory Card Game")
+    
+    def get_player_name(self):
+        """Get the player name before starting the game."""
+        self.screen.fill(WHITE)
+        input_text = ""
+        input_active = True
+        input_rect = pygame.Rect(self.width // 2 - 140, 250, 280, 50)
+
+        # Title
+        title = FONT_LARGE.render("Enter Your Name", True, BLUE)
+        self.screen.blit(title, (self.width // 2 - title.get_width() // 2, 150))
+
+        while True:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit()
+                    sys.exit()
+                
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_RETURN and input_text.strip():
+                        return input_text.strip()
+                    elif event.key == pygame.K_BACKSPACE:
+                        input_text = input_text[:-1]
+                    else:
+                        # Limit name length to 15 characters
+                        if len(input_text) < 15 and event.unicode.isalnum():
+                            input_text += event.unicode
+
+            # Draw input box
+            pygame.draw.rect(self.screen, BLUE, input_rect, 2, 10)
+            
+            # Draw input text
+            text_surface = FONT_MEDIUM.render(input_text, True, BLACK)
+            # Center the text in the input box
+            text_x = input_rect.centerx - text_surface.get_width() // 2
+            text_y = input_rect.centery - text_surface.get_height() // 2
+            self.screen.fill(WHITE, input_rect.inflate(-4, -4))
+            self.screen.blit(text_surface, (text_x, text_y))
+
+            # Draw instruction
+            instruction = FONT_SMALL.render("Press ENTER to continue", True, GRAY)
+            self.screen.blit(instruction, (self.width // 2 - instruction.get_width() // 2, 320))
+
+            pygame.display.flip()
+            self.clock.tick(FPS)
     
     def show_start_screen(self):
         """Show the game start screen and get player settings."""
@@ -397,7 +443,7 @@ class GameGUI:
         self.screen.blit(self.overlay_surface, (0, 0))
         
         # Game over text
-        game_over_text = FONT_LARGE.render("CONGRATULATIONS!", True, YELLOW)
+        game_over_text = FONT_LARGE.render(f"¡FELICIDADES {self.player_name}!", True, YELLOW)
         self.screen.blit(game_over_text, (self.width // 2 - game_over_text.get_width() // 2, 160))
         
         # Calculate time taken
@@ -490,6 +536,9 @@ class GameGUI:
         """Run the game loop."""
         self.setup_window()
         running = True
+        
+        # Get player name before starting
+        self.player_name = self.get_player_name()  # Modifica esta línea
         
         # Pre-create often used surfaces to avoid recreation
         self.overlay_surface = pygame.Surface((self.width, self.height), pygame.SRCALPHA)

@@ -88,7 +88,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
-
+Entorno_juego_memorick/
 # Spyder project settings
 .spyderproject
 .spyproject
