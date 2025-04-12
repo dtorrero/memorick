@@ -231,16 +231,7 @@ class GameGUI:
                     elif input_rect.collidepoint(event.pos):
                         server_url_active = False
                         input_active = True
-                    
-                    # Force sync button (only in remote mode)
-                    if db_mode == "remote" and 'force_sync_rect' in locals() and force_sync_rect.collidepoint(event.pos):
-                        # Force sync all pending game stats
-                        from database_sync import get_sync_database
-                        db = get_sync_database(server_url=server_url_input)
-                        synced_count = db.force_sync_all()
-                        connection_status = f"Synced {synced_count} items"
-                        connection_color = BLUE
-                
+            
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_RETURN:
                         if input_text.strip():
@@ -402,17 +393,10 @@ class GameGUI:
                     instruction = FONT_SMALL.render("Press ENTER or click OK to continue", True, GRAY)
             self.screen.blit(instruction, (self.width // 2 - instruction.get_width() // 2, 430))
 
-            # Dynamic button based on database mode
-            if db_mode == "remote":
+            # Show database mode indicator
+            if self.db_mode == "remote":
                 remote_status = FONT_SMALL.render("Remote Mode", True, BLUE)
                 self.screen.blit(remote_status, (self.width - 150, 10))
-                
-                # Force Sync button
-                force_sync_rect = pygame.Rect(self.width - 150, self.height - 50, 140, 40)
-                pygame.draw.rect(self.screen, BLUE, force_sync_rect, border_radius=5)
-                force_sync_text = FONT_SMALL.render("Force Sync", True, WHITE)
-                self.screen.blit(force_sync_text, (force_sync_rect.x + (force_sync_rect.width - force_sync_text.get_width()) // 2, 
-                                                force_sync_rect.y + (force_sync_rect.height - force_sync_text.get_height()) // 2))
             else:
                 local_status = FONT_SMALL.render("Local Mode", True, GREEN)
                 self.screen.blit(local_status, (self.width - 150, 10))
@@ -806,6 +790,14 @@ class GameGUI:
             self.screen.blit(player_text, (stats_rect.x + 10, stats_rect.y + 10))
             self.screen.blit(errors_text, (stats_rect.x + 10, stats_rect.y + 30))
             self.screen.blit(time_text, (stats_rect.x + 10, stats_rect.y + 50))
+            
+            # Show database mode indicator
+            if self.db_mode == "remote":
+                mode_text = self.render_text(FONT_SMALL, "Remote Mode", BLUE)
+                self.screen.blit(mode_text, (self.width - 150, 10))
+            else:
+                mode_text = self.render_text(FONT_SMALL, "Local Mode", GREEN)
+                self.screen.blit(mode_text, (self.width - 150, 10))
     
     def show_message(self, message, duration=2000):
         """Show a message for a duration in milliseconds."""
@@ -940,8 +932,34 @@ class GameGUI:
         return False
     
     def show_stats_screen(self):
-        """Show the statistics screen with leaderboard and player stats."""
-        db = get_game_database(mode=self.db_mode, server_url=self.server_url)
+        """Show player statistics and leaderboards."""
+        # Force sync before showing stats if in remote mode
+        if self.db_mode == "remote":
+            try:
+                from database_sync import get_sync_database
+                db = get_sync_database(server_url=self.server_url)
+                db.force_sync_all()
+                # Brief notification that sync was performed
+                self.screen.fill(WHITE)
+                sync_msg = FONT_SMALL.render("Syncing with server...", True, BLUE)
+                self.screen.blit(sync_msg, (self.width // 2 - sync_msg.get_width() // 2, self.height // 2))
+                pygame.display.flip()
+                # Wait a moment for the user to see the message
+                pygame.time.wait(500)
+            except Exception as e:
+                print(f"Error syncing before stats: {str(e)}")
+        
+        # Reset the screen
+        self.screen.fill(WHITE)
+        
+        # Get database instance based on mode
+        if self.db_mode == "local":
+            from database import get_database
+            db = get_database()
+        else:  # Remote mode
+            from database_sync import get_sync_database
+            db = get_sync_database(server_url=self.server_url)
+        
         self.screen.fill(WHITE)
         
         # Title
@@ -1362,6 +1380,55 @@ class GameGUI:
         self.match_animation_cards = []
         self.flipping_cards = []
         gc.collect()  # Garbage collection
+
+    def game_over(self):
+        """Handle game over logic."""
+        # Calculate final stats
+        end_time = time.time()
+        duration = end_time - self.start_time
+        minutes = int(duration // 60)
+        seconds = duration % 60
+        
+        # Save game to database
+        if self.player_name:  # Only save if we have a player name
+            if self.db_mode == "local":
+                from database import get_database
+                db = get_database()
+            else:  # Remote mode
+                from database_sync import get_sync_database
+                db = get_sync_database(server_url=self.server_url)
+            
+            # Save to database
+            db.save_game_stats(
+                self.player_name,
+                self.difficulty_name,
+                self.start_time,
+                end_time,
+                self.moves,
+                self.matches,
+                True  # Completed
+            )
+            
+            # Force sync if in remote mode
+            if self.db_mode == "remote":
+                db.force_sync_all()
+        
+        # Set up game over screen
+        self.screen.fill(WHITE)
+        
+        # Create surfaces for text elements with alpha for animations
+        surfaces = []
+
+        # Game over text
+        game_over_surf = FONT_LARGE.render("GAME OVER", True, BLUE)
+        surfaces.append((game_over_surf, (self.width // 2 - game_over_surf.get_width() // 2, 80)))
+        
+        # Congratulations text
+        if self.player_name:
+            congrats_surf = FONT_MEDIUM.render(f"Congratulations, {self.player_name}!", True, BLACK)
+        else:
+            congrats_surf = FONT_MEDIUM.render("Congratulations!", True, BLACK)
+        surfaces.append((congrats_surf, (self.width // 2 - congrats_surf.get_width() // 2, 150)))
 
 
 def main():

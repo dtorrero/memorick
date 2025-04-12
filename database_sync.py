@@ -257,6 +257,14 @@ class SyncGameDatabase(OriginalGameDatabase):
         Returns empty list if server is unreachable, to maintain isolation between
         local and remote data.
         """
+        # First try to sync any pending stats
+        if self.online or self.check_server_connection():
+            try:
+                # Quick sync to ensure our stats are included
+                self.force_sync_all()
+            except Exception as e:
+                print(f"Warning: Could not sync before getting leaderboard: {e}")
+        
         if not self.online and not self.check_server_connection():
             print("Cannot get remote leaderboard: Server is offline")
             return []  # Return empty list instead of local data
@@ -265,7 +273,8 @@ class SyncGameDatabase(OriginalGameDatabase):
             # Try to get remote leaderboard
             difficulty_param = difficulty if difficulty else "all"
             url = f"{self.server_url}/api/stats/leaderboard/{difficulty_param}"
-            response = requests.get(url, params={"limit": limit}, timeout=3)
+            print(f"Fetching leaderboard from: {url}")
+            response = requests.get(url, params={"limit": limit}, timeout=5)
             
             if response.status_code == 200:
                 data = response.json()
@@ -283,13 +292,22 @@ class SyncGameDatabase(OriginalGameDatabase):
         Get a player's statistics from the remote server.
         Returns empty stats if server is unreachable, to maintain isolation.
         """
+        # First try to sync any pending stats
+        if self.online or self.check_server_connection():
+            try:
+                # Quick sync to ensure this player's stats are included
+                self.force_sync_all()
+            except Exception as e:
+                print(f"Warning: Could not sync before getting player stats: {e}")
+        
         if not self.online and not self.check_server_connection():
             print("Cannot get remote player stats: Server is offline")
             return {"player": player_name, "stats": []}  # Empty stats instead of local data
         
         try:
             url = f"{self.server_url}/api/stats/player/{player_name}"
-            response = requests.get(url, timeout=3)
+            print(f"Fetching player stats from: {url}")
+            response = requests.get(url, timeout=5)
             
             if response.status_code == 200:
                 return response.json()
