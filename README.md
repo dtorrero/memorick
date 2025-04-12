@@ -135,3 +135,64 @@ Both modes maintain separate databases, ensuring that your local stats remain pr
 - The game uses Pygame 2.5.2 for rendering and input handling
 - SQLite is used for persistent storage without requiring external database setup
 - The code is structured for easy modifications and extensions
+
+## Docker Support
+
+The project includes Docker support for both the client and server components.
+
+### Running the Server with Docker
+
+1. **Build and run the server container**:
+   ```bash
+   docker-compose up server
+   ```
+
+   This will start the statistics server on port 5000. The server data is stored in a Docker volume for persistence.
+
+2. **Access the server**:
+   - Dashboard: http://localhost:5000
+   - API endpoints: http://localhost:5000/api/stats/...
+
+### Running the Client with Docker
+
+Running the client in Docker requires X11 forwarding to display the graphical interface.
+
+#### On Linux:
+
+1. **Allow X server connections**:
+   ```bash
+   xhost +local:docker
+   ```
+
+2. **Edit docker-compose.yml** to uncomment the client service.
+
+3. **Run the client**:
+   ```bash
+   docker-compose up client
+   ```
+
+#### On Windows/macOS:
+
+Due to the graphical nature of the client, it's recommended to run the client natively on Windows and macOS. However, you can still use Docker for the server component.
+
+### Building Images Separately
+
+If needed, you can build the Docker images separately:
+
+```bash
+# Build the server image
+docker build -t memory-game-server -f Dockerfile.server .
+
+# Build the client image
+docker build -t memory-game-client -f Dockerfile.client .
+```
+
+Then run them individually:
+
+```bash
+# Run the server
+docker run -p 5000:5000 memory-game-server
+
+# Run the client (Linux only, with X11 forwarding)
+docker run -e DISPLAY=$DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix memory-game-client
+```

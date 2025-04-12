@@ -1,0 +1,35 @@
+version: '3'
+
+services:
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    ports:
+      - "5000:5000"
+    volumes:
+      - server-data:/app/server
+    environment:
+      - PORT=5000
+    restart: unless-stopped
+
+  # Note: The client service is commented out by default since it requires
+  # X11 forwarding to display the GUI, which is platform-dependent
+  # Uncomment and configure as needed
+  
+  # client:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile.client
+  #   depends_on:
+  #     - server
+  #   environment:
+  #     - DISPLAY=${DISPLAY}
+  #   volumes:
+  #     - /tmp/.X11-unix:/tmp/.X11-unix
+  #     - client-data:/app/data
+  #   network_mode: "host"  # Needed for X11 forwarding on Linux
+
+volumes:
+  server-data:  # Persistent volume for server database
+  # client-data:  # Uncomment if using the client in Docker 
