@@ -113,6 +113,10 @@ dmypy.json
 # Game specific
 *.save
 highscores.json
+game_settings.json
 
 # Database files
 *.db
+
+# Client identification
+.client_id
