@@ -113,4 +113,6 @@ dmypy.json
 # Game specific
 *.save
 highscores.json
-memory_game.db  # SQLite database file
+
+# Database files
+*.db

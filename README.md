@@ -124,6 +124,13 @@ The game uses an SQLite database (memory_game.db) with a single table:
 
 The leaderboards rank players by completion time (fastest first), with errors as a secondary sorting criterion when times are equal.
 
+### Database Modes
+The game supports two database modes:
+- **Local Database Only**: Game statistics are stored only on your device and are not shared with others
+- **Remote Server**: Game statistics are stored on a remote server, allowing you to compete with other players. You can specify a custom server URL to connect to a shared leaderboard.
+
+Both modes maintain separate databases, ensuring that your local stats remain private when desired, while still allowing for competitive play through the remote server option.
+
 ## Development Notes
 - The game uses Pygame 2.5.2 for rendering and input handling
 - SQLite is used for persistent storage without requiring external database setup

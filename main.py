@@ -12,6 +12,9 @@ pygame.font.init()
 # Don't initialize audio if not needed
 # pygame.mixer.init()
 
+# Add imports for server functionality
+import os
+
 # Colors
 WHITE = (255, 255, 255)
 BLACK = (0, 0, 0)
@@ -35,6 +38,50 @@ FPS = 60
 CARD_MARGIN = 10
 ANIMATION_SPEED = 5  # Frames per animation step
 
+# Global database reference
+current_db = None
+
+def get_game_database(mode="local", server_url=None):
+    """
+    Factory function to get the appropriate database instance.
+    
+    Args:
+        mode: 'local' for local-only database, 'remote' for server-synchronized database
+        server_url: URL of the remote server, required for 'remote' mode
+        
+    Returns:
+        Database instance for game statistics
+    """
+    global current_db
+    
+    # For local mode, use the standard database
+    if mode == "local" or not server_url:
+        from database import get_database
+        current_db = get_database()
+        print("Using local database only - your stats will be stored locally")
+        return current_db
+    
+    # For remote mode, try to use the synchronized database
+    elif mode == "remote":
+        try:
+            # Try to import and initialize the synchronized database
+            from database_sync import SyncGameDatabase
+            # Create a new instance with the specified server URL
+            current_db = SyncGameDatabase(db_file="memory_game.db", server_url=server_url)
+            print(f"Using server at {server_url} - your stats will be compared with other players")
+            return current_db
+        except Exception as e:
+            # If there's an error, fall back to local database
+            print(f"Error initializing sync database: {e}")
+            print("Falling back to local database")
+            from database import get_database
+            current_db = get_database()
+            return current_db
+    
+    # Default fallback
+    from database import get_database
+    current_db = get_database()
+    return current_db
 
 class GameGUI:
     """Graphical user interface for the memory card game."""
@@ -71,6 +118,8 @@ class GameGUI:
         self.last_gc_time = 0
         self.text_cache = {}  # Cache for rendered text
         self.player_name = ""
+        self.server_url = None
+        self.db_mode = "local"
     
     def setup_window(self):
         """Set up the game window."""
@@ -82,21 +131,39 @@ class GameGUI:
         self.screen.fill(WHITE)
         input_text = ""
         input_active = True
-        input_rect = pygame.Rect(self.width // 2 - 140, 250, 280, 50)
+        input_rect = pygame.Rect(self.width // 2 - 140, 230, 280, 50)
         cursor_visible = True
         cursor_timer = 0
         cursor_blink_time = 500  # milliseconds
         
+        # Server configuration
+        server_url_input = "http://localhost:5000"  # Default server URL
+        server_url_active = False
+        server_url_rect = pygame.Rect(self.width // 2 - 140, 385, 280, 40)  # Moved down below radio buttons
+        
+        # Database mode: "local" or "remote"
+        db_mode = "local"  # Default to local database
+        
         # Draw welcome title
         title = FONT_LARGE.render("Welcome to Memory Game", True, BLUE)
-        self.screen.blit(title, (self.width // 2 - title.get_width() // 2, 100))
+        self.screen.blit(title, (self.width // 2 - title.get_width() // 2, 80))
 
         # Draw subtitle
         subtitle = FONT_MEDIUM.render("Enter Your Name", True, BLACK)
         self.screen.blit(subtitle, (self.width // 2 - subtitle.get_width() // 2, 180))
         
         # Create an OK button
-        ok_button_rect = pygame.Rect(self.width // 2 - 50, 320, 100, 40)
+        ok_button_rect = pygame.Rect(self.width // 2 - 50, 480, 100, 40)  # Moved down to make room
+        
+        # Radio button size and positions
+        radio_radius = 10
+        radio_x = self.width // 2 - 140
+        radio_y_local = 310
+        radio_y_remote = 350
+        
+        # Server connection status
+        connection_status = None
+        connection_status_color = GRAY
 
         while True:
             current_time = pygame.time.get_ticks()
@@ -111,56 +178,199 @@ class GameGUI:
                     pygame.quit()
                     sys.exit()
                 
-                # Handle mouse clicks for the OK button
+                # Handle mouse clicks
                 elif event.type == pygame.MOUSEBUTTONDOWN:
+                    # Check for OK button click
                     if ok_button_rect.collidepoint(event.pos) and input_text.strip():
-                        return input_text.strip()
+                        # If using remote database, check connection before proceeding
+                        if db_mode == "remote":
+                            try:
+                                # Test server connection
+                                import requests
+                                response = requests.get(f"{server_url_input}/", timeout=2)
+                                if response.status_code == 200:
+                                    connection_status = "Connected"
+                                    connection_status_color = GREEN
+                                    # Store in global configuration
+                                    self.server_url = server_url_input
+                                    self.db_mode = db_mode
+                                    return input_text.strip()
+                                else:
+                                    connection_status = "Error: Server returned status " + str(response.status_code)
+                                    connection_status_color = RED
+                            except Exception as e:
+                                connection_status = "Error: Cannot connect to server"
+                                connection_status_color = RED
+                                print(f"Connection error: {e}")
+                        else:
+                            # For local mode, just return
+                            self.server_url = None
+                            self.db_mode = db_mode
+                            return input_text.strip()
+                    
+                    # Check radio button clicks
+                    radio_local_rect = pygame.Rect(radio_x - radio_radius, radio_y_local - radio_radius, 
+                                                radio_radius * 2, radio_radius * 2)
+                    radio_remote_rect = pygame.Rect(radio_x - radio_radius, radio_y_remote - radio_radius, 
+                                                 radio_radius * 2, radio_radius * 2)
+                    
+                    if radio_local_rect.collidepoint(event.pos):
+                        db_mode = "local"
+                        server_url_active = False
+                    
+                    if radio_remote_rect.collidepoint(event.pos):
+                        db_mode = "remote"
+                        server_url_active = True
+                    
+                    # Check if server URL input field was clicked
+                    if server_url_rect.collidepoint(event.pos):
+                        if db_mode == "remote":  # Only activate if remote mode is selected
+                            server_url_active = True
+                            input_active = False
+                    elif input_rect.collidepoint(event.pos):
+                        server_url_active = False
+                        input_active = True
                 
                 elif event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_RETURN and input_text.strip():
-                        return input_text.strip()
+                    if event.key == pygame.K_RETURN:
+                        if input_text.strip():
+                            if db_mode == "remote":
+                                # Test server connection
+                                try:
+                                    import requests
+                                    response = requests.get(f"{server_url_input}/", timeout=2)
+                                    if response.status_code == 200:
+                                        connection_status = "Connected"
+                                        connection_status_color = GREEN
+                                        # Store in global configuration
+                                        self.server_url = server_url_input
+                                        self.db_mode = db_mode
+                                        return input_text.strip()
+                                    else:
+                                        connection_status = "Error: Server returned status " + str(response.status_code)
+                                        connection_status_color = RED
+                                except Exception as e:
+                                    connection_status = "Error: Cannot connect to server"
+                                    connection_status_color = RED
+                                    print(f"Connection error: {e}")
+                            else:
+                                # For local mode, just return
+                                self.server_url = None
+                                self.db_mode = db_mode
+                                return input_text.strip()
+                    elif event.key == pygame.K_TAB:
+                        # Toggle between input fields with Tab
+                        if db_mode == "remote":  # Only toggle if remote mode is selected
+                            server_url_active = not server_url_active
+                            input_active = not input_active
                     elif event.key == pygame.K_BACKSPACE:
-                        input_text = input_text[:-1]
+                        if input_active:
+                            input_text = input_text[:-1]
+                        elif server_url_active:
+                            server_url_input = server_url_input[:-1]
                     elif event.key == pygame.K_ESCAPE:
                         # Allow the user to exit
                         pygame.quit()
                         sys.exit()
                     else:
-                        # Allow letters, numbers and spaces, with a max length of 15
-                        if len(input_text) < 15 and (event.unicode.isalnum() or event.unicode == " "):
-                            # Don't allow spaces at the beginning or consecutive spaces
-                            if event.unicode != " " or (input_text and input_text[-1] != " "):
-                                input_text += event.unicode
+                        # Handle text input
+                        if input_active:
+                            # Allow letters, numbers and spaces for name, with a max length of 15
+                            if len(input_text) < 15 and (event.unicode.isalnum() or event.unicode == " "):
+                                # Don't allow spaces at the beginning or consecutive spaces
+                                if event.unicode != " " or (input_text and input_text[-1] != " "):
+                                    input_text += event.unicode
+                        elif server_url_active and db_mode == "remote":
+                            # Allow URL characters for server URL
+                            valid_url_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~:/?#[]@!$&'()*+,;="
+                            if event.unicode in valid_url_chars:
+                                server_url_input += event.unicode
             
             # Redraw the screen
             self.screen.fill(WHITE)
             
             # Draw titles
-            self.screen.blit(title, (self.width // 2 - title.get_width() // 2, 100))
+            self.screen.blit(title, (self.width // 2 - title.get_width() // 2, 80))
             self.screen.blit(subtitle, (self.width // 2 - subtitle.get_width() // 2, 180))
             
-            # Draw input box - change color based on activity
+            # Draw player name input box
             box_color = BLUE if input_active else GRAY
             pygame.draw.rect(self.screen, box_color, input_rect, 2, 10)
             
-            # Draw input text
+            # Draw player name input text
             text_surface = FONT_MEDIUM.render(input_text, True, BLACK)
-            
-            # Center the text in the input box
             text_x = input_rect.centerx - text_surface.get_width() // 2
             text_y = input_rect.centery - text_surface.get_height() // 2
-            
-            # Clear background before drawing text
             self.screen.fill(WHITE, input_rect.inflate(-4, -4))
             self.screen.blit(text_surface, (text_x, text_y))
             
-            # Draw cursor
-            if cursor_visible and input_active:
-                cursor_x = text_x + text_surface.get_width()
-                cursor_y = text_y
-                pygame.draw.line(self.screen, BLACK, 
-                                (cursor_x, cursor_y), 
-                                (cursor_x, cursor_y + text_surface.get_height()), 2)
+            # Draw cursor for active input
+            if cursor_visible:
+                if input_active:
+                    cursor_x = text_x + text_surface.get_width()
+                    cursor_y = text_y
+                    pygame.draw.line(self.screen, BLACK, 
+                                    (cursor_x, cursor_y), 
+                                    (cursor_x, cursor_y + text_surface.get_height()), 2)
+            
+            # Draw radio buttons and labels
+            db_option_title = FONT_SMALL.render("Database Option:", True, BLACK)
+            self.screen.blit(db_option_title, (radio_x, radio_y_local - 30))
+            
+            # Local database option
+            pygame.draw.circle(self.screen, BLACK, (radio_x, radio_y_local), radio_radius, 1)
+            if db_mode == "local":
+                pygame.draw.circle(self.screen, BLACK, (radio_x, radio_y_local), radio_radius - 3)
+            local_label = FONT_SMALL.render("Local Database Only", True, BLACK)
+            self.screen.blit(local_label, (radio_x + radio_radius * 2 + 5, radio_y_local - local_label.get_height() // 2))
+            
+            # Remote database option
+            pygame.draw.circle(self.screen, BLACK, (radio_x, radio_y_remote), radio_radius, 1)
+            if db_mode == "remote":
+                pygame.draw.circle(self.screen, BLACK, (radio_x, radio_y_remote), radio_radius - 3)
+            remote_label = FONT_SMALL.render("Remote Server", True, BLACK)
+            self.screen.blit(remote_label, (radio_x + radio_radius * 2 + 5, radio_y_remote - remote_label.get_height() // 2))
+            
+            # Draw server URL input box (only if remote mode is selected)
+            if db_mode == "remote":
+                # Draw server URL label above the input field
+                url_label = FONT_SMALL.render("Server URL:", True, BLUE if server_url_active else BLACK)
+                self.screen.blit(url_label, (server_url_rect.x, server_url_rect.y - 25))
+                
+                box_color = BLUE if server_url_active else GRAY
+                pygame.draw.rect(self.screen, box_color, server_url_rect, 2, 5)
+                
+                # Draw server URL text
+                server_text_surface = FONT_SMALL.render(server_url_input, True, BLACK)
+                self.screen.fill(WHITE, server_url_rect.inflate(-4, -4))
+                self.screen.blit(server_text_surface, (server_url_rect.x + 5, 
+                                                    server_url_rect.centery - server_text_surface.get_height() // 2))
+                
+                # Draw cursor for server URL input if active
+                if cursor_visible and server_url_active:
+                    cursor_x = server_url_rect.x + 5 + server_text_surface.get_width()
+                    cursor_y = server_url_rect.centery - server_text_surface.get_height() // 2
+                    pygame.draw.line(self.screen, BLUE, 
+                                    (cursor_x, cursor_y), 
+                                    (cursor_x, cursor_y + server_text_surface.get_height()), 
+                                    2)  # Thicker line for better visibility
+            
+            # Display connection status if tested - moved outside the remote mode block so it's always visible
+            if connection_status:
+                # Create a background for the status message
+                status_text = FONT_SMALL.render(connection_status, True, WHITE)
+                status_rect = pygame.Rect(self.width // 2 - status_text.get_width() // 2 - 10, 
+                                          450, 
+                                          status_text.get_width() + 20, 
+                                          status_text.get_height() + 10)
+                
+                # Draw background based on status color
+                pygame.draw.rect(self.screen, connection_status_color, status_rect, 0, 5)
+                pygame.draw.rect(self.screen, BLACK, status_rect, 1, 5)
+                
+                # Center the text in the background
+                self.screen.blit(status_text, (status_rect.centerx - status_text.get_width() // 2, 
+                                              status_rect.centery - status_text.get_height() // 2))
             
             # Draw OK button
             button_color = GREEN if input_text.strip() else GRAY
@@ -172,12 +382,15 @@ class GameGUI:
             self.screen.blit(ok_text, (ok_button_rect.centerx - ok_text.get_width() // 2, 
                               ok_button_rect.centery - ok_text.get_height() // 2))
 
-            # Draw instruction
+            # Draw instruction - moved higher up to avoid overlap
             if not input_text.strip():
                 instruction = FONT_SMALL.render("Please enter your name to continue", True, RED)
             else:
-                instruction = FONT_SMALL.render("Press ENTER or click OK to continue", True, GRAY)
-            self.screen.blit(instruction, (self.width // 2 - instruction.get_width() // 2, 380))
+                if db_mode == "remote":
+                    instruction = FONT_SMALL.render("Press ENTER or click OK to continue (will test connection)", True, GRAY)
+                else:
+                    instruction = FONT_SMALL.render("Press ENTER or click OK to continue", True, GRAY)
+            self.screen.blit(instruction, (self.width // 2 - instruction.get_width() // 2, 430))
 
             pygame.display.flip()
             self.clock.tick(FPS)
@@ -599,7 +812,7 @@ class GameGUI:
         errors = max(0, total_attempts - total_matches)
         
         # Save game stats to database
-        db = get_database()
+        db = get_game_database(mode=self.db_mode, server_url=self.server_url)
         difficulty_map = {4: "Easy", 6: "Medium", 10: "Hard"}
         difficulty = difficulty_map.get(self.game.board.rows, "Custom")
         
@@ -703,7 +916,7 @@ class GameGUI:
     
     def show_stats_screen(self):
         """Show the statistics screen with leaderboard and player stats."""
-        db = get_database()
+        db = get_game_database(mode=self.db_mode, server_url=self.server_url)
         self.screen.fill(WHITE)
         
         # Title
@@ -886,13 +1099,11 @@ class GameGUI:
             pygame.display.flip()
             self.clock.tick(FPS)
     
-    def run(self):
+    def run_game(self):
         """Run the game loop."""
-        self.setup_window()
-        running = True
-        
-        # Get player name before starting
-        self.player_name = self.get_player_name()
+        # We don't need to set up the window or get player name again
+        # self.setup_window()  # Already done in main()
+        # self.player_name = self.get_player_name()  # Already done in main()
         
         # Pre-create often used surfaces to avoid recreation
         self.overlay_surface = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
@@ -902,245 +1113,256 @@ class GameGUI:
         memory_usage = []
         self.last_gc_time = pygame.time.get_ticks()
         
-        while running:
-            # Show start screen and get difficulty settings
-            rows, cols = self.show_start_screen()
-            
-            # Create a new game with selected difficulty
-            self.game = Game(rows=rows, cols=cols)
-            self.game.start_game()
-            
-            # For 10x10 grid, adjust the UI to make room
-            if rows == 10:
-                self.board_margin_top = 80  # Minimize top margin
-                # Make sure cards are small enough
-                self.card_width = min(self.card_width, 50)
-                self.card_height = self.card_width * 1.25
-                # Reduce card margins for tighter packing
-                global CARD_MARGIN
-                CARD_MARGIN = 5
-            
-            # Game session variables
-            game_active = True
-            waiting_for_flip_back = False
-            flip_back_time = 0
-            game_completed = False  # Flag to track if we've already handled game completion
-            
-            # Main game loop for current game session
-            while game_active:
-                current_time = pygame.time.get_ticks()
-                
-                # Memory management - clean up text cache if it gets too large
-                if len(self.text_cache) > 100:
-                    # Keep only the most recent 20 items
-                    cache_keys = list(self.text_cache.keys())
-                    for key in cache_keys[:-20]:
-                        del self.text_cache[key]
-                
-                # Process events - limit the number of events processed per frame
-                for event in pygame.event.get()[:10]:  # Limit to 10 events per frame
-                    if event.type == pygame.QUIT:
-                        pygame.quit()
-                        sys.exit()
-                    
-                    elif event.type == pygame.MOUSEBUTTONDOWN:
-                        if not waiting_for_flip_back and self.game.game_active:
-                            pos = pygame.mouse.get_pos()
-                            card_pos = self.get_card_at_pos(pos)
-                            
-                            if card_pos:
-                                row, col = card_pos
-                                card = self.game.board.get_card(row, col)
-                                
-                                if card and not card.is_matched and not card.is_face_up:
-                                    # Start flip animation
-                                    self.flip_card_animation(row, col)
-                                    
-                                    # Check if this is the second card being flipped
-                                    face_up_cards = [c for c in self.game.board.cards 
-                                                   if c.is_face_up and not c.is_matched]
-                                    
-                                    # If we now have 2 cards face up, process the match check after animation
-                                    if len(face_up_cards) == 2:
-                                        # Set a timer to check for matches
-                                        pygame.time.set_timer(pygame.USEREVENT, 150, 1)
-                    
-                    elif event.type == pygame.KEYDOWN:
-                        if event.key == pygame.K_ESCAPE:
-                            # Save abandoned game stats
-                            if self.game and self.game.game_active:
-                                db = get_database()
-                                difficulty_map = {4: "Easy", 6: "Medium", 10: "Hard"}
-                                difficulty = difficulty_map.get(self.game.board.rows, "Custom")
-                                
-                                # Record end time as current time
-                                self.game.scoreboard.current_game_stats["end_time"] = time.time()
-                                
-                                db.save_game_stats(
-                                    player_name=self.player_name if self.player_name else "Anonymous",
-                                    difficulty=difficulty,
-                                    start_time=self.game.scoreboard.current_game_stats["start_time"],
-                                    end_time=self.game.scoreboard.current_game_stats["end_time"],
-                                    moves=self.game.player.moves,
-                                    matches=self.game.player.matches,
-                                    completed=False  # Mark as abandoned
-                                )
-                            
-                            # Go back to main menu
-                            game_active = False
-                    
-                    elif event.type == pygame.USEREVENT:
-                        # Check for matches
-                        face_up_cards = [c for c in self.game.board.cards 
-                                       if c.is_face_up and not c.is_matched]
-                        
-                        if len(face_up_cards) == 2:
-                            # We have two cards face up, process the match
-                            card1, card2 = face_up_cards
-                            row1, col1 = self.game.board.get_card_position(card1.card_id)
-                            row2, col2 = self.game.board.get_card_position(card2.card_id)
-                            
-                            # Record the move in the game
-                            result = self.game.check_match(row1, col1, row2, col2)
-                            
-                            if "Match found" in result:
-                                self.show_message(f"Match found! +10 points", 1500)
-                                
-                                # Start match animation
-                                self.match_animation_active = True
-                                self.match_animation_start = pygame.time.get_ticks()
-                                self.match_animation_cards = face_up_cards.copy()
-                                
-                                # Check if the game is over - SIMPLIFIED APPROACH
-                                if self.game.player.matches >= len(self.game.board.cards) // 2:
-                                    print("Match detection found game completed!")
-                                    # End the game immediately
-                                    self.game.game_active = False
-                                    self.game.scoreboard.end_game()
-                                    game_completed = True
-                                    
-                                    # Force show the game over screen directly here
-                                    # Instead of using a timer, show it immediately
-                                    print("Directly showing game over screen!")
-                                    result = self.show_game_over()
-                                    
-                                    if result:
-                                        # Play again with same difficulty
-                                        # End this game session and start a new one
-                                        self.game = Game(rows=rows, cols=cols)
-                                        self.game.start_game()
-                                        
-                                        # Reset game session variables
-                                        waiting_for_flip_back = False
-                                        flip_back_time = 0
-                                        game_completed = False
-                                    else:
-                                        # Return to main menu
-                                        game_active = False
-                            else:
-                                # Not a match, schedule to flip them back
-                                waiting_for_flip_back = True
-                                flip_back_time = pygame.time.get_ticks() + 1500  # 1.5 seconds
-                                
-                                # Start shake animation
-                                self.shake_animation_active = True
-                                self.shake_animation_start = pygame.time.get_ticks()
-                                self.shake_animation_cards = face_up_cards.copy()
-                    
-                    elif event.type == pygame.USEREVENT + 2:
-                        # Reset unmatched cards event
-                        self.game.board.reset_unmatched()
-                
-                # Check if it's time to flip cards back
-                if waiting_for_flip_back and current_time >= flip_back_time:
-                    waiting_for_flip_back = False
-                    
-                    # Start flip animations for the cards
-                    for card in self.game.board.flipped_cards:
-                        row, col = self.game.board.get_card_position(card.card_id)
-                        self.flipping_cards.append((card, pygame.time.get_ticks(), False))
-                    
-                    # Actually reset the cards in the game model after animation finishes
-                    pygame.time.set_timer(pygame.USEREVENT + 2, 300, 1)  # One-time event
-                
-                # Extra check for game over, in case the event system missed it
-                if self.game and self.game.game_active and not game_completed:
-                    # Check for game completion after each frame - SIMPLIFIED APPROACH
-                    if self.game.player.matches >= len(self.game.board.cards) // 2:
-                        print(f"Extra check found game completed! Matches: {self.game.player.matches}, Total pairs: {len(self.game.board.cards) // 2}")
-                        game_completed = True  # Mark as completed to prevent duplicate handling
-                        
-                        # Directly show the game over screen without any delay
-                        self.game.game_active = False
-                        self.game.scoreboard.end_game()
-                        
-                        print("Showing game over screen from extra check!")
-                        result = self.show_game_over()
-                        
-                        if result:
-                            # Play again with same difficulty
-                            # End this game session and start a new one
-                            self.game = Game(rows=rows, cols=cols)
-                            self.game.start_game()
-                            
-                            # Reset game session variables
-                            waiting_for_flip_back = False
-                            flip_back_time = 0
-                            game_completed = False
-                        else:
-                            # Return to main menu
-                            game_active = False
-                        
-                        # Skip the rest of the loop to avoid any drawing or further processing
-                        continue
-                
-                # Update screen
-                self.screen.fill(WHITE)
-                self.update_animations()
-                self.draw_ui()
-                self.draw_board()
-                pygame.display.flip()
-                
-                # Cap the frame rate
-                self.clock.tick(FPS)
-                
-                # Explicitly call garbage collection periodically (every 30 seconds)
-                if current_time - self.last_gc_time > 30000:  # 30 seconds
-                    gc.collect()
-                    self.last_gc_time = current_time
-                    
-                    # Try to get process memory info for monitoring (optional)
-                    try:
-                        import os, psutil
-                        process = psutil.Process(os.getpid())
-                        mem_info = process.memory_info()
-                        memory_usage.append(mem_info.rss / 1024 / 1024)  # MB
-                        
-                        # Log memory usage (for debugging)
-                        if len(memory_usage) > 10:
-                            memory_usage.pop(0)
-                        
-                        # If memory usage is growing too rapidly, clear caches
-                        if len(memory_usage) > 3 and memory_usage[-1] > memory_usage[0] * 1.5:
-                            self.text_cache.clear()
-                            
-                    except (ImportError, AttributeError):
-                        # psutil not available, skip monitoring
-                        pass
+        # Start the game
+        self.game.start_game()
         
-        # Clean up explicitly when exiting
-        self.text_cache.clear()
-        self.overlay_surface = None
-        self.match_animation_cards = None
-        self.flipping_cards = None
-        gc.collect()  # Final garbage collection
-        pygame.quit()
+        # For 10x10 grid, adjust the UI to make room
+        rows = self.game.board.rows
+        if rows == 10:
+            self.board_margin_top = 80  # Minimize top margin
+            # Make sure cards are small enough
+            self.card_width = min(self.card_width, 50)
+            self.card_height = self.card_width * 1.25
+            # Reduce card margins for tighter packing
+            global CARD_MARGIN
+            CARD_MARGIN = 5
+        
+        # Game session variables
+        game_active = True
+        waiting_for_flip_back = False
+        flip_back_time = 0
+        game_completed = False  # Flag to track if we've already handled game completion
+        
+        # Main game loop for current game session
+        while game_active:
+            current_time = pygame.time.get_ticks()
+            
+            # Memory management - clean up text cache if it gets too large
+            if len(self.text_cache) > 100:
+                # Keep only the most recent 20 items
+                cache_keys = list(self.text_cache.keys())
+                for key in cache_keys[:-20]:
+                    del self.text_cache[key]
+            
+            # Process events - limit the number of events processed per frame
+            for event in pygame.event.get()[:10]:  # Limit to 10 events per frame
+                if event.type == pygame.QUIT:
+                    pygame.quit()
+                    sys.exit()
+                
+                elif event.type == pygame.MOUSEBUTTONDOWN:
+                    if not waiting_for_flip_back and self.game.game_active:
+                        pos = pygame.mouse.get_pos()
+                        card_pos = self.get_card_at_pos(pos)
+                        
+                        if card_pos:
+                            row, col = card_pos
+                            card = self.game.board.get_card(row, col)
+                            
+                            if card and not card.is_matched and not card.is_face_up:
+                                # Start flip animation
+                                self.flip_card_animation(row, col)
+                                
+                                # Check if this is the second card being flipped
+                                face_up_cards = [c for c in self.game.board.cards 
+                                               if c.is_face_up and not c.is_matched]
+                                
+                                # If we now have 2 cards face up, process the match check after animation
+                                if len(face_up_cards) == 2:
+                                    # Set a timer to check for matches
+                                    pygame.time.set_timer(pygame.USEREVENT, 150, 1)
+                
+                elif event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        # Save abandoned game stats
+                        if self.game and self.game.game_active:
+                            db = get_game_database(mode=self.db_mode, server_url=self.server_url)
+                            difficulty_map = {4: "Easy", 6: "Medium", 10: "Hard"}
+                            difficulty = difficulty_map.get(self.game.board.rows, "Custom")
+                            
+                            # Record end time as current time
+                            self.game.scoreboard.current_game_stats["end_time"] = time.time()
+                            
+                            db.save_game_stats(
+                                player_name=self.player_name if self.player_name else "Anonymous",
+                                difficulty=difficulty,
+                                start_time=self.game.scoreboard.current_game_stats["start_time"],
+                                end_time=self.game.scoreboard.current_game_stats["end_time"],
+                                moves=self.game.player.moves,
+                                matches=self.game.player.matches,
+                                completed=False  # Mark as abandoned
+                            )
+                        
+                        # Go back to main menu
+                        game_active = False
+                
+                elif event.type == pygame.USEREVENT:
+                    # Check for matches
+                    face_up_cards = [c for c in self.game.board.cards 
+                                   if c.is_face_up and not c.is_matched]
+                    
+                    if len(face_up_cards) == 2:
+                        # We have two cards face up, process the match
+                        card1, card2 = face_up_cards
+                        row1, col1 = self.game.board.get_card_position(card1.card_id)
+                        row2, col2 = self.game.board.get_card_position(card2.card_id)
+                        
+                        # Record the move in the game
+                        result = self.game.check_match(row1, col1, row2, col2)
+                        
+                        if "Match found" in result:
+                            # Start match animation
+                            self.match_animation_active = True
+                            self.match_animation_start = pygame.time.get_ticks()
+                            self.match_animation_cards = face_up_cards.copy()
+                            
+                            # Check if the game is over - SIMPLIFIED APPROACH
+                            if self.game.player.matches >= len(self.game.board.cards) // 2:
+                                print("Match detection found game completed!")
+                                # End the game immediately
+                                self.game.game_active = False
+                                self.game.scoreboard.end_game()
+                                game_completed = True
+                                
+                                # Force show the game over screen directly here
+                                # Instead of using a timer, show it immediately
+                                print("Directly showing game over screen!")
+                                result = self.show_game_over()
+                                
+                                if result:
+                                    # Play again with same difficulty
+                                    # End this game session and start a new one
+                                    self.game = Game(rows=rows, cols=cols, player_name=self.player_name)
+                                    self.game.start_game()
+                                    
+                                    # Reset game session variables
+                                    waiting_for_flip_back = False
+                                    flip_back_time = 0
+                                    game_completed = False
+                                else:
+                                    # Return to main menu
+                                    game_active = False
+                        else:
+                            # Not a match, schedule to flip them back
+                            waiting_for_flip_back = True
+                            flip_back_time = pygame.time.get_ticks() + 1500  # 1.5 seconds
+                            
+                            # Start shake animation
+                            self.shake_animation_active = True
+                            self.shake_animation_start = pygame.time.get_ticks()
+                            self.shake_animation_cards = face_up_cards.copy()
+                
+                elif event.type == pygame.USEREVENT + 2:
+                    # Reset unmatched cards event
+                    self.game.board.reset_unmatched()
+            
+            # Check if it's time to flip cards back
+            if waiting_for_flip_back and current_time >= flip_back_time:
+                waiting_for_flip_back = False
+                
+                # Start flip animations for the cards
+                for card in self.game.board.flipped_cards:
+                    row, col = self.game.board.get_card_position(card.card_id)
+                    self.flipping_cards.append((card, pygame.time.get_ticks(), False))
+                
+                # Actually reset the cards in the game model after animation finishes
+                pygame.time.set_timer(pygame.USEREVENT + 2, 300, 1)  # One-time event
+            
+            # Extra check for game over, in case the event system missed it
+            if self.game and self.game.game_active and not game_completed:
+                # Check for game completion after each frame - SIMPLIFIED APPROACH
+                if self.game.player.matches >= len(self.game.board.cards) // 2:
+                    print(f"Extra check found game completed! Matches: {self.game.player.matches}, Total pairs: {len(self.game.board.cards) // 2}")
+                    game_completed = True  # Mark as completed to prevent duplicate handling
+                    
+                    # Directly show the game over screen without any delay
+                    self.game.game_active = False
+                    self.game.scoreboard.end_game()
+                    
+                    print("Showing game over screen from extra check!")
+                    result = self.show_game_over()
+                    
+                    if result:
+                        # Play again with same difficulty
+                        # End this game session and start a new one
+                        self.game = Game(rows=rows, cols=cols, player_name=self.player_name)
+                        self.game.start_game()
+                        
+                        # Reset game session variables
+                        waiting_for_flip_back = False
+                        flip_back_time = 0
+                        game_completed = False
+                    else:
+                        # Return to main menu
+                        game_active = False
+                    
+                    # Skip the rest of the loop to avoid any drawing or further processing
+                    continue
+            
+            # Update screen
+            self.screen.fill(WHITE)
+            self.update_animations()
+            self.draw_ui()
+            self.draw_board()
+            pygame.display.flip()
+            
+            # Cap the frame rate
+            self.clock.tick(FPS)
+            
+            # Explicitly call garbage collection periodically (every 30 seconds)
+            if current_time - self.last_gc_time > 30000:  # 30 seconds
+                gc.collect()
+                self.last_gc_time = current_time
+                
+                # Try to get process memory info for monitoring (optional)
+                try:
+                    import os, psutil
+                    process = psutil.Process(os.getpid())
+                    mem_info = process.memory_info()
+                    memory_usage.append(mem_info.rss / 1024 / 1024)  # MB
+                    
+                    # Log memory usage (for debugging)
+                    if len(memory_usage) > 10:
+                        memory_usage.pop(0)
+                    
+                    # If memory usage is growing too rapidly, clear caches
+                    if len(memory_usage) > 3 and memory_usage[-1] > memory_usage[0] * 1.5:
+                        self.text_cache.clear()
+                        
+                except (ImportError, AttributeError):
+                    # psutil not available, skip monitoring
+                    pass
+        
+        # Clean up this game session, but don't quit pygame
+        self.match_animation_cards = []
+        self.flipping_cards = []
+        gc.collect()  # Garbage collection
 
 
 def main():
-    """Start the memory card game."""
-    game_gui = GameGUI()
-    game_gui.run()
+    """Main function to run the game."""
+    pygame.init()
+    gui = GameGUI()
+    gui.setup_window()
+    
+    # Get player name and database settings
+    player_name = gui.get_player_name()
+    gui.player_name = player_name
+    
+    # Initialize the appropriate database based on user selection
+    db = get_game_database(mode=gui.db_mode, server_url=gui.server_url)
+    
+    # Main game loop
+    running = True
+    while running:
+        # Show start screen and get difficulty
+        rows, cols = gui.show_start_screen()
+        
+        # Create a new game with selected difficulty
+        gui.game = Game(rows=rows, cols=cols, player_name=player_name)
+        
+        # Start and run the game - passing False to not call setup_window and get_player_name again
+        gui.run_game()
 
 
 if __name__ == "__main__":
