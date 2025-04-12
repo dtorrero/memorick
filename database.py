@@ -145,6 +145,7 @@ class GameDatabase:
                        limit: int = 10) -> List[Dict[str, Any]]:
         """
         Get the leaderboard (best games by time) for a given difficulty.
+        Players with the same time are ranked by number of errors (fewer errors rank higher).
         
         Args:
             difficulty: Game difficulty (Easy, Medium, Hard) or None for all
@@ -157,9 +158,10 @@ class GameDatabase:
             if not self.conn:
                 self.initialize_db()
             
+            # Use explicit SQL ordering to ensure correct results
             query = '''
                 SELECT id, player_name, difficulty, start_time, end_time, 
-                       duration_seconds, moves, matches, errors
+                       duration_seconds, errors
                 FROM game_stats 
                 WHERE completed = 1
             '''
@@ -169,13 +171,23 @@ class GameDatabase:
                 query += " AND difficulty = ?"
                 params.append(difficulty)
             
-            query += " ORDER BY duration_seconds ASC LIMIT ?"
+            # Explicitly order first by time ascending, then by errors ascending
+            # This ensures players with the same time but fewer errors rank higher
+            query += " ORDER BY duration_seconds ASC, errors ASC LIMIT ?"
             params.append(limit)
             
-            self.cursor.execute(query, params)
+            # Debug the actual query being executed
+            print(f"Executing leaderboard query: {query} with params {params}")
             
-            columns = [col[0] for col in self.cursor.description]
-            return [dict(zip(columns, row)) for row in self.cursor.fetchall()]
+            self.cursor.execute(query, params)
+            results = [dict(zip([col[0] for col in self.cursor.description], row)) 
+                      for row in self.cursor.fetchall()]
+            
+            # Debug the results
+            for i, result in enumerate(results):
+                print(f"Leaderboard entry {i+1}: time={result['duration_seconds']}, errors={result['errors']}")
+            
+            return results
         except sqlite3.Error as e:
             print(f"Error retrieving leaderboard: {e}")
             return []

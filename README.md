@@ -13,7 +13,7 @@ A Python-based memory card game with multiple difficulty levels, animations, pla
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/yourusername/memorick.git
+   git clone https://github.com/dtorrero/memorick
    cd memorick
    ```
 
@@ -65,7 +65,7 @@ Match pairs of cards with the same value by flipping them over two at a time. Th
 - Name personalization throughout the game
 - Card flip animations and visual feedback
 - Persistent statistics tracking
-- Leaderboards for each difficulty level
+- Leaderboards for each difficulty level (sorted by completion time, with errors as a tiebreaker)
 
 ## Technical Architecture
 
@@ -121,6 +121,8 @@ Match pairs of cards with the same value by flipping them over two at a time. Th
 ### Database Schema
 The game uses an SQLite database (memory_game.db) with a single table:
 - **game_stats**: Stores completed game information with fields for player name, difficulty, duration, moves, matches, errors, and completion status
+
+The leaderboards rank players by completion time (fastest first), with errors as a secondary sorting criterion when times are equal.
 
 ## Development Notes
 - The game uses Pygame 2.5.2 for rendering and input handling

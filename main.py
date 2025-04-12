@@ -500,10 +500,10 @@ class GameGUI:
         return self.text_cache[cache_key]
     
     def format_time(self, seconds):
-        """Format time in minutes:seconds."""
+        """Format time in minutes:seconds.hundredths."""
         minutes = int(seconds // 60)
-        seconds = int(seconds % 60)
-        return f"{minutes:02d}:{seconds:02d}"
+        seconds_part = seconds % 60
+        return f"{minutes:02d}:{seconds_part:05.2f}"
     
     def draw_ui(self):
         """Draw the user interface elements."""
@@ -762,8 +762,8 @@ class GameGUI:
             
             # Draw leaderboard headers
             header_y = 200
-            headers = ["Rank", "Player", "Time", "Moves", "Errors"]
-            header_widths = [60, 200, 100, 100, 100]
+            headers = ["Rank", "Player", "Time", "Errors"]
+            header_widths = [60, 240, 110, 110]
             header_x = self.width // 2 - sum(header_widths) // 2
             
             for i, header in enumerate(headers):
@@ -780,12 +780,11 @@ class GameGUI:
                     # Convert duration to MM:SS format
                     duration_formatted = self.format_time(entry["duration_seconds"])
                     
-                    # Row data
+                    # Row data for leaderboard
                     row_data = [
                         f"{i+1}",
                         entry["player_name"],
                         duration_formatted,
-                        str(entry["moves"]),
                         str(entry["errors"])
                     ]
                     
@@ -799,18 +798,24 @@ class GameGUI:
             
             # Draw personal stats for current player if available
             if self.player_name:
+                # Get stats filtered by the currently selected difficulty
+                current_difficulty = tabs[selected_tab]["name"]
                 player_stats = db.get_player_stats(self.player_name)
-                if player_stats:
-                    # Calculate aggregate stats
-                    total_games = len(player_stats)
-                    completed_games = sum(1 for stat in player_stats if stat["completed"])
-                    total_time = sum(stat["duration_seconds"] for stat in player_stats)
+                
+                # Filter stats for the selected difficulty
+                difficulty_stats = [stat for stat in player_stats if stat["difficulty"] == current_difficulty]
+                
+                if difficulty_stats:
+                    # Calculate filtered stats for the selected difficulty
+                    total_games = len(difficulty_stats)
+                    completed_games = sum(1 for stat in difficulty_stats if stat["completed"])
+                    total_time = sum(stat["duration_seconds"] for stat in difficulty_stats)
                     avg_time = total_time / total_games if total_games > 0 else 0
-                    best_time = min((stat["duration_seconds"] for stat in player_stats if stat["completed"]), default=0)
+                    best_time = min((stat["duration_seconds"] for stat in difficulty_stats if stat["completed"]), default=0)
                     
                     # Player stats section
                     stats_y = 380
-                    stats_title = FONT_MEDIUM.render(f"Your Stats: {self.player_name}", True, GREEN)
+                    stats_title = FONT_MEDIUM.render(f"Your {current_difficulty} Stats: {self.player_name}", True, GREEN)
                     self.screen.blit(stats_title, (self.width // 2 - stats_title.get_width() // 2, stats_y))
                     
                     stats_text = [
@@ -823,13 +828,22 @@ class GameGUI:
                     for i, text in enumerate(stats_text):
                         stat_text = FONT_SMALL.render(text, True, BLACK)
                         self.screen.blit(stat_text, (self.width // 2 - stat_text.get_width() // 2, stats_y + 40 + i * 25))
+                else:
+                    # No stats for this difficulty
+                    stats_y = 380
+                    stats_title = FONT_MEDIUM.render(f"Your {current_difficulty} Stats: {self.player_name}", True, GREEN)
+                    self.screen.blit(stats_title, (self.width // 2 - stats_title.get_width() // 2, stats_y))
+                    
+                    no_stats = FONT_SMALL.render(f"No games played on {current_difficulty} difficulty", True, GRAY)
+                    self.screen.blit(no_stats, (self.width // 2 - no_stats.get_width() // 2, stats_y + 40))
             
             # Draw back button
             button_color = GREEN if back_rect.collidepoint(mouse_pos) else (100, 200, 100)
             pygame.draw.rect(self.screen, button_color, back_rect, 0, 10)
             pygame.draw.rect(self.screen, BLACK, back_rect, 2, 10)
             
-            back_text = FONT_MEDIUM.render("Back to Menu", True, WHITE)
+            # Use smaller font for back button to avoid text touching border
+            back_text = FONT_SMALL.render("Back to Menu", True, WHITE)
             self.screen.blit(back_text, (back_rect.centerx - back_text.get_width() // 2, 
                                        back_rect.centery - back_text.get_height() // 2))
             
