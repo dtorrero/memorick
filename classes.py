@@ -172,7 +172,8 @@ class Board:
     
     def is_game_over(self) -> bool:
         """Check if all pairs have been matched."""
-        return self.matches == len(self.cards) // 2
+        total_pairs = len(self.cards) // 2
+        return self.matches == total_pairs
     
     def __str__(self) -> str:
         """Return a string representation of the board."""
@@ -504,12 +505,6 @@ class Game:
             card1.match()
             card2.match()
             self.player.add_match()
-            
-            # Check if the game is over
-            if self.board.is_game_over():
-                self.game_active = False
-                game_stats = self.scoreboard.end_game()
-                return f"Match found! {card1.value}\nGame Over! You completed the game in {self.player.moves} moves and {game_stats['time']:.1f} seconds."
             
             return f"Match found! {card1.value}"
         else:

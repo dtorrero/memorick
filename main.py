@@ -4,6 +4,7 @@ import time
 import gc  # Import garbage collector module at the top level
 import math
 from classes import Card, Board, Player, Game
+from database import get_database
 
 # Memory optimization - limit pygame features we don't need
 pygame.display.init()
@@ -210,6 +211,9 @@ class GameGUI:
         medium_rect = pygame.Rect(self.width // 2 - button_width // 2, button_y_start + button_height + button_margin, button_width, button_height)
         hard_rect = pygame.Rect(self.width // 2 - button_width // 2, button_y_start + (button_height + button_margin) * 2, button_width, button_height)
         
+        # Add stats button
+        stats_rect = pygame.Rect(self.width // 2 - button_width // 2, button_y_start + (button_height + button_margin) * 3, button_width, button_height)
+        
         # Main loop for start screen
         difficulty = None
         waiting = True
@@ -270,6 +274,22 @@ class GameGUI:
             pygame.draw.rect(self.screen, WHITE, hard_rect, 2, 10)
             text = FONT_MEDIUM.render("Hard", True, WHITE)
             self.screen.blit(text, (hard_rect.centerx - text.get_width() // 2, hard_rect.centery - text.get_height() // 2))
+            
+            # Stats Button
+            button_color = GREEN if stats_rect.collidepoint(mouse_pos) else (100, 200, 100)
+            pygame.draw.rect(self.screen, button_color, stats_rect, 0, 10)
+            pygame.draw.rect(self.screen, WHITE, stats_rect, 2, 10)
+            text = FONT_MEDIUM.render("Statistics", True, WHITE)
+            self.screen.blit(text, (stats_rect.centerx - text.get_width() // 2, stats_rect.centery - text.get_height() // 2))
+            
+            if mouse_clicked and stats_rect.collidepoint(mouse_pos):
+                self.show_stats_screen()
+                # Redraw the start screen after coming back from stats
+                self.screen.fill(WHITE)
+                self.screen.blit(title, (self.width // 2 - title.get_width() // 2, 80))
+                for i, line in enumerate(instructions):
+                    text = FONT_SMALL.render(line, True, BLACK)
+                    self.screen.blit(text, (self.width // 2 - text.get_width() // 2, 150 + i * 30))
             
             pygame.display.flip()
             self.clock.tick(FPS)
@@ -548,6 +568,21 @@ class GameGUI:
         total_attempts = self.game.player.moves
         errors = max(0, total_attempts - total_matches)
         
+        # Save game stats to database
+        db = get_database()
+        difficulty_map = {4: "Easy", 6: "Medium", 10: "Hard"}
+        difficulty = difficulty_map.get(self.game.board.rows, "Custom")
+        
+        db.save_game_stats(
+            player_name=self.player_name if self.player_name else "Anonymous",
+            difficulty=difficulty,
+            start_time=self.game.scoreboard.current_game_stats["start_time"],
+            end_time=self.game.scoreboard.current_game_stats["end_time"],
+            moves=total_attempts,
+            matches=total_matches,
+            completed=True
+        )
+        
         # Show only time and errors as requested
         errors_text = self.render_text(FONT_MEDIUM, f"Errors: {errors}", WHITE)
         time_text = self.render_text(FONT_MEDIUM, f"Time: {self.format_time(time_taken)}", WHITE)
@@ -618,18 +653,191 @@ class GameGUI:
     
     def check_game_over(self):
         """Check if the game is over and trigger the game over event if needed."""
-        if self.game and self.game.board.is_game_over():
-            # End the game and schedule the game over screen
+        if not self.game:
+            return False
+            
+        # Simple direct check for game completion
+        if self.game.game_active and self.game.player.matches >= len(self.game.board.cards) // 2:
+            print("Game over detected in check_game_over!")
             self.game.game_active = False
             self.game.scoreboard.end_game()
-            pygame.time.set_timer(pygame.USEREVENT + 1, 1500, 1)
             
-            # Clear any existing message when game ends
-            self.message = ""
-            self.message_timer = 0
+            # Show game over screen directly instead of using a timer
+            print("Showing game over screen from check_game_over!")
+            result = self.show_game_over()
             
+            # Return True to indicate that we've handled the game over condition
             return True
+            
         return False
+    
+    def show_stats_screen(self):
+        """Show the statistics screen with leaderboard and player stats."""
+        db = get_database()
+        self.screen.fill(WHITE)
+        
+        # Title
+        title = FONT_LARGE.render("Game Statistics", True, BLUE)
+        self.screen.blit(title, (self.width // 2 - title.get_width() // 2, 30))
+        
+        # Get leaderboard data
+        easy_leaders = db.get_leaderboard(difficulty="Easy", limit=5)
+        medium_leaders = db.get_leaderboard(difficulty="Medium", limit=5)
+        hard_leaders = db.get_leaderboard(difficulty="Hard", limit=5)
+        
+        # Draw tab buttons
+        tab_width, tab_height = 120, 40
+        tabs_y = 100
+        
+        easy_tab_rect = pygame.Rect(self.width // 4 - tab_width // 2, tabs_y, tab_width, tab_height)
+        medium_tab_rect = pygame.Rect(self.width // 2 - tab_width // 2, tabs_y, tab_width, tab_height)
+        hard_tab_rect = pygame.Rect(3 * self.width // 4 - tab_width // 2, tabs_y, tab_width, tab_height)
+        
+        # Tabs data
+        tabs = [
+            {"name": "Easy", "rect": easy_tab_rect, "data": easy_leaders},
+            {"name": "Medium", "rect": medium_tab_rect, "data": medium_leaders},
+            {"name": "Hard", "rect": hard_tab_rect, "data": hard_leaders}
+        ]
+        
+        selected_tab = 0  # Default to Easy tab
+        
+        # Back button
+        back_rect = pygame.Rect(self.width // 2 - 100, 520, 200, 50)
+        
+        # Main loop for stats screen
+        running = True
+        while running:
+            mouse_pos = pygame.mouse.get_pos()
+            mouse_clicked = False
+            
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit()
+                    sys.exit()
+                elif event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        running = False
+                elif event.type == pygame.MOUSEBUTTONDOWN:
+                    if event.button == 1:  # Left mouse button
+                        mouse_clicked = True
+            
+            # Clear screen
+            self.screen.fill(WHITE)
+            
+            # Draw title
+            self.screen.blit(title, (self.width // 2 - title.get_width() // 2, 30))
+            
+            # Draw tabs
+            for i, tab in enumerate(tabs):
+                # Determine tab color based on selection and hover
+                if i == selected_tab:
+                    tab_color = BLUE
+                    text_color = WHITE
+                elif tab["rect"].collidepoint(mouse_pos):
+                    tab_color = (150, 150, 255)
+                    text_color = BLACK
+                else:
+                    tab_color = (220, 220, 255)
+                    text_color = BLACK
+                
+                # Draw tab and handle click
+                pygame.draw.rect(self.screen, tab_color, tab["rect"], 0, 10)
+                pygame.draw.rect(self.screen, BLUE, tab["rect"], 2, 10)
+                
+                tab_text = FONT_MEDIUM.render(tab["name"], True, text_color)
+                self.screen.blit(tab_text, (tab["rect"].centerx - tab_text.get_width() // 2, 
+                                          tab["rect"].centery - tab_text.get_height() // 2))
+                
+                if mouse_clicked and tab["rect"].collidepoint(mouse_pos):
+                    selected_tab = i
+            
+            # Draw selected tab content (leaderboard)
+            current_tab = tabs[selected_tab]
+            leaderboard_data = current_tab["data"]
+            
+            # Leaderboard title
+            lb_title = FONT_MEDIUM.render(f"Top Players - {current_tab['name']}", True, BLACK)
+            self.screen.blit(lb_title, (self.width // 2 - lb_title.get_width() // 2, 160))
+            
+            # Draw leaderboard headers
+            header_y = 200
+            headers = ["Rank", "Player", "Time", "Moves", "Errors"]
+            header_widths = [60, 200, 100, 100, 100]
+            header_x = self.width // 2 - sum(header_widths) // 2
+            
+            for i, header in enumerate(headers):
+                header_text = FONT_SMALL.render(header, True, BLUE)
+                self.screen.blit(header_text, (header_x, header_y))
+                header_x += header_widths[i]
+            
+            # Draw leaderboard data
+            if leaderboard_data:
+                for i, entry in enumerate(leaderboard_data):
+                    row_y = 230 + i * 30
+                    row_x = self.width // 2 - sum(header_widths) // 2
+                    
+                    # Convert duration to MM:SS format
+                    duration_formatted = self.format_time(entry["duration_seconds"])
+                    
+                    # Row data
+                    row_data = [
+                        f"{i+1}",
+                        entry["player_name"],
+                        duration_formatted,
+                        str(entry["moves"]),
+                        str(entry["errors"])
+                    ]
+                    
+                    for j, data in enumerate(row_data):
+                        data_text = FONT_SMALL.render(data, True, BLACK)
+                        self.screen.blit(data_text, (row_x, row_y))
+                        row_x += header_widths[j]
+            else:
+                no_data_text = FONT_MEDIUM.render("No games played yet!", True, GRAY)
+                self.screen.blit(no_data_text, (self.width // 2 - no_data_text.get_width() // 2, 280))
+            
+            # Draw personal stats for current player if available
+            if self.player_name:
+                player_stats = db.get_player_stats(self.player_name)
+                if player_stats:
+                    # Calculate aggregate stats
+                    total_games = len(player_stats)
+                    completed_games = sum(1 for stat in player_stats if stat["completed"])
+                    total_time = sum(stat["duration_seconds"] for stat in player_stats)
+                    avg_time = total_time / total_games if total_games > 0 else 0
+                    best_time = min((stat["duration_seconds"] for stat in player_stats if stat["completed"]), default=0)
+                    
+                    # Player stats section
+                    stats_y = 380
+                    stats_title = FONT_MEDIUM.render(f"Your Stats: {self.player_name}", True, GREEN)
+                    self.screen.blit(stats_title, (self.width // 2 - stats_title.get_width() // 2, stats_y))
+                    
+                    stats_text = [
+                        f"Games Played: {total_games}",
+                        f"Games Completed: {completed_games}",
+                        f"Best Time: {self.format_time(best_time)}",
+                        f"Average Time: {self.format_time(avg_time)}"
+                    ]
+                    
+                    for i, text in enumerate(stats_text):
+                        stat_text = FONT_SMALL.render(text, True, BLACK)
+                        self.screen.blit(stat_text, (self.width // 2 - stat_text.get_width() // 2, stats_y + 40 + i * 25))
+            
+            # Draw back button
+            button_color = GREEN if back_rect.collidepoint(mouse_pos) else (100, 200, 100)
+            pygame.draw.rect(self.screen, button_color, back_rect, 0, 10)
+            pygame.draw.rect(self.screen, BLACK, back_rect, 2, 10)
+            
+            back_text = FONT_MEDIUM.render("Back to Menu", True, WHITE)
+            self.screen.blit(back_text, (back_rect.centerx - back_text.get_width() // 2, 
+                                       back_rect.centery - back_text.get_height() // 2))
+            
+            if mouse_clicked and back_rect.collidepoint(mouse_pos):
+                running = False
+            
+            pygame.display.flip()
+            self.clock.tick(FPS)
     
     def run(self):
         """Run the game loop."""
@@ -669,6 +877,7 @@ class GameGUI:
             game_active = True
             waiting_for_flip_back = False
             flip_back_time = 0
+            game_completed = False  # Flag to track if we've already handled game completion
             
             # Main game loop for current game session
             while game_active:
@@ -711,6 +920,25 @@ class GameGUI:
                     
                     elif event.type == pygame.KEYDOWN:
                         if event.key == pygame.K_ESCAPE:
+                            # Save abandoned game stats
+                            if self.game and self.game.game_active:
+                                db = get_database()
+                                difficulty_map = {4: "Easy", 6: "Medium", 10: "Hard"}
+                                difficulty = difficulty_map.get(self.game.board.rows, "Custom")
+                                
+                                # Record end time as current time
+                                self.game.scoreboard.current_game_stats["end_time"] = time.time()
+                                
+                                db.save_game_stats(
+                                    player_name=self.player_name if self.player_name else "Anonymous",
+                                    difficulty=difficulty,
+                                    start_time=self.game.scoreboard.current_game_stats["start_time"],
+                                    end_time=self.game.scoreboard.current_game_stats["end_time"],
+                                    moves=self.game.player.moves,
+                                    matches=self.game.player.matches,
+                                    completed=False  # Mark as abandoned
+                                )
+                            
                             # Go back to main menu
                             game_active = False
                     
@@ -736,13 +964,32 @@ class GameGUI:
                                 self.match_animation_start = pygame.time.get_ticks()
                                 self.match_animation_cards = face_up_cards.copy()
                                 
-                                if "Game Over" in result:
-                                    # Game is over, show end screen after a delay
-                                    pygame.time.set_timer(pygame.USEREVENT + 1, 1500, 1)
+                                # Check if the game is over - SIMPLIFIED APPROACH
+                                if self.game.player.matches >= len(self.game.board.cards) // 2:
+                                    print("Match detection found game completed!")
+                                    # End the game immediately
+                                    self.game.game_active = False
+                                    self.game.scoreboard.end_game()
+                                    game_completed = True
                                     
-                                    # Clear any message when game ends
-                                    self.message = ""
-                                    self.message_timer = 0
+                                    # Force show the game over screen directly here
+                                    # Instead of using a timer, show it immediately
+                                    print("Directly showing game over screen!")
+                                    result = self.show_game_over()
+                                    
+                                    if result:
+                                        # Play again with same difficulty
+                                        # End this game session and start a new one
+                                        self.game = Game(rows=rows, cols=cols)
+                                        self.game.start_game()
+                                        
+                                        # Reset game session variables
+                                        waiting_for_flip_back = False
+                                        flip_back_time = 0
+                                        game_completed = False
+                                    else:
+                                        # Return to main menu
+                                        game_active = False
                             else:
                                 # Not a match, schedule to flip them back
                                 waiting_for_flip_back = True
@@ -752,26 +999,6 @@ class GameGUI:
                                 self.shake_animation_active = True
                                 self.shake_animation_start = pygame.time.get_ticks()
                                 self.shake_animation_cards = face_up_cards.copy()
-                    
-                    elif event.type == pygame.USEREVENT + 1:
-                        # Game over event - show congratulation screen
-                        result = self.show_game_over()
-                        
-                        if result:
-                            # Play again with same difficulty
-                            game_active = False  # End this game session
-                            
-                            # Create a new game with the same settings
-                            self.game = Game(rows=rows, cols=cols)
-                            self.game.start_game()
-                            
-                            # Reset game session variables
-                            game_active = True
-                            waiting_for_flip_back = False
-                            flip_back_time = 0
-                        else:
-                            # Return to main menu
-                            game_active = False
                     
                     elif event.type == pygame.USEREVENT + 2:
                         # Reset unmatched cards event
@@ -790,8 +1017,35 @@ class GameGUI:
                     pygame.time.set_timer(pygame.USEREVENT + 2, 300, 1)  # One-time event
                 
                 # Extra check for game over, in case the event system missed it
-                if self.game.game_active and self.game.board.is_game_over():
-                    self.check_game_over()
+                if self.game and self.game.game_active and not game_completed:
+                    # Check for game completion after each frame - SIMPLIFIED APPROACH
+                    if self.game.player.matches >= len(self.game.board.cards) // 2:
+                        print(f"Extra check found game completed! Matches: {self.game.player.matches}, Total pairs: {len(self.game.board.cards) // 2}")
+                        game_completed = True  # Mark as completed to prevent duplicate handling
+                        
+                        # Directly show the game over screen without any delay
+                        self.game.game_active = False
+                        self.game.scoreboard.end_game()
+                        
+                        print("Showing game over screen from extra check!")
+                        result = self.show_game_over()
+                        
+                        if result:
+                            # Play again with same difficulty
+                            # End this game session and start a new one
+                            self.game = Game(rows=rows, cols=cols)
+                            self.game.start_game()
+                            
+                            # Reset game session variables
+                            waiting_for_flip_back = False
+                            flip_back_time = 0
+                            game_completed = False
+                        else:
+                            # Return to main menu
+                            game_active = False
+                        
+                        # Skip the rest of the loop to avoid any drawing or further processing
+                        continue
                 
                 # Update screen
                 self.screen.fill(WHITE)

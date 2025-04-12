@@ -1,1 +1,2 @@
-pygame==2.5.2 
+pygame==2.5.2
+# SQLite is included in the Python standard library 
