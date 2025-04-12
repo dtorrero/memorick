@@ -467,3 +467,51 @@ class Game:
         """Return a string representation of the game state."""
         game_status = "Active" if self.game_active else "Inactive"
         return f"Game Status: {game_status}\n{self.player}\n{self.board}"
+    
+    def check_match(self, row1, col1, row2, col2):
+        """
+        Check if two cards match and process the result.
+        
+        Args:
+            row1: Row index of first card
+            col1: Column index of first card
+            row2: Row index of second card
+            col2: Column index of second card
+            
+        Returns:
+            String describing what happened
+        """
+        if not self.game_active:
+            return "Game not active. Start a new game first."
+        
+        card1 = self.board.get_card(row1, col1)
+        card2 = self.board.get_card(row2, col2)
+        
+        if not card1 or not card2:
+            return "Invalid card position"
+        
+        if not card1.is_face_up or not card2.is_face_up:
+            return "Cards must be face up to check match"
+        
+        if card1.card_id == card2.card_id:
+            return "Same card selected twice"
+        
+        # Record the move
+        self.player.add_move()
+        
+        # Check if it's a match
+        if card1.value == card2.value:
+            card1.match()
+            card2.match()
+            self.player.add_match()
+            
+            # Check if the game is over
+            if self.board.is_game_over():
+                self.game_active = False
+                game_stats = self.scoreboard.end_game()
+                return f"Match found! {card1.value}\nGame Over! You completed the game in {self.player.moves} moves and {game_stats['time']:.1f} seconds."
+            
+            return f"Match found! {card1.value}"
+        else:
+            # No match found
+            return "No match found"

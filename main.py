@@ -69,7 +69,7 @@ class GameGUI:
         # Memory management
         self.last_gc_time = 0
         self.text_cache = {}  # Cache for rendered text
-        self.player_name = ""  # Añade esta línea
+        self.player_name = ""
     
     def setup_window(self):
         """Set up the game window."""
@@ -82,41 +82,101 @@ class GameGUI:
         input_text = ""
         input_active = True
         input_rect = pygame.Rect(self.width // 2 - 140, 250, 280, 50)
+        cursor_visible = True
+        cursor_timer = 0
+        cursor_blink_time = 500  # milliseconds
+        
+        # Draw welcome title
+        title = FONT_LARGE.render("Welcome to Memory Game", True, BLUE)
+        self.screen.blit(title, (self.width // 2 - title.get_width() // 2, 100))
 
-        # Title
-        title = FONT_LARGE.render("Enter Your Name", True, BLUE)
-        self.screen.blit(title, (self.width // 2 - title.get_width() // 2, 150))
+        # Draw subtitle
+        subtitle = FONT_MEDIUM.render("Enter Your Name", True, BLACK)
+        self.screen.blit(subtitle, (self.width // 2 - subtitle.get_width() // 2, 180))
+        
+        # Create an OK button
+        ok_button_rect = pygame.Rect(self.width // 2 - 50, 320, 100, 40)
 
         while True:
+            current_time = pygame.time.get_ticks()
+            
+            # Handle cursor blinking
+            if current_time - cursor_timer > cursor_blink_time:
+                cursor_visible = not cursor_visible
+                cursor_timer = current_time
+                
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     pygame.quit()
                     sys.exit()
                 
-                if event.type == pygame.KEYDOWN:
+                # Handle mouse clicks for the OK button
+                elif event.type == pygame.MOUSEBUTTONDOWN:
+                    if ok_button_rect.collidepoint(event.pos) and input_text.strip():
+                        return input_text.strip()
+                
+                elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_RETURN and input_text.strip():
                         return input_text.strip()
                     elif event.key == pygame.K_BACKSPACE:
                         input_text = input_text[:-1]
+                    elif event.key == pygame.K_ESCAPE:
+                        # Allow the user to exit
+                        pygame.quit()
+                        sys.exit()
                     else:
-                        # Limit name length to 15 characters
-                        if len(input_text) < 15 and event.unicode.isalnum():
-                            input_text += event.unicode
-
-            # Draw input box
-            pygame.draw.rect(self.screen, BLUE, input_rect, 2, 10)
+                        # Allow letters, numbers and spaces, with a max length of 15
+                        if len(input_text) < 15 and (event.unicode.isalnum() or event.unicode == " "):
+                            # Don't allow spaces at the beginning or consecutive spaces
+                            if event.unicode != " " or (input_text and input_text[-1] != " "):
+                                input_text += event.unicode
+            
+            # Redraw the screen
+            self.screen.fill(WHITE)
+            
+            # Draw titles
+            self.screen.blit(title, (self.width // 2 - title.get_width() // 2, 100))
+            self.screen.blit(subtitle, (self.width // 2 - subtitle.get_width() // 2, 180))
+            
+            # Draw input box - change color based on activity
+            box_color = BLUE if input_active else GRAY
+            pygame.draw.rect(self.screen, box_color, input_rect, 2, 10)
             
             # Draw input text
             text_surface = FONT_MEDIUM.render(input_text, True, BLACK)
+            
             # Center the text in the input box
             text_x = input_rect.centerx - text_surface.get_width() // 2
             text_y = input_rect.centery - text_surface.get_height() // 2
+            
+            # Clear background before drawing text
             self.screen.fill(WHITE, input_rect.inflate(-4, -4))
             self.screen.blit(text_surface, (text_x, text_y))
+            
+            # Draw cursor
+            if cursor_visible and input_active:
+                cursor_x = text_x + text_surface.get_width()
+                cursor_y = text_y
+                pygame.draw.line(self.screen, BLACK, 
+                                (cursor_x, cursor_y), 
+                                (cursor_x, cursor_y + text_surface.get_height()), 2)
+            
+            # Draw OK button
+            button_color = GREEN if input_text.strip() else GRAY
+            pygame.draw.rect(self.screen, button_color, ok_button_rect, 0, 10)
+            pygame.draw.rect(self.screen, WHITE, ok_button_rect, 2, 10)
+            
+            # Draw button text
+            ok_text = FONT_MEDIUM.render("OK", True, WHITE)
+            self.screen.blit(ok_text, (ok_button_rect.centerx - ok_text.get_width() // 2, 
+                              ok_button_rect.centery - ok_text.get_height() // 2))
 
             # Draw instruction
-            instruction = FONT_SMALL.render("Press ENTER to continue", True, GRAY)
-            self.screen.blit(instruction, (self.width // 2 - instruction.get_width() // 2, 320))
+            if not input_text.strip():
+                instruction = FONT_SMALL.render("Please enter your name to continue", True, RED)
+            else:
+                instruction = FONT_SMALL.render("Press ENTER or click OK to continue", True, GRAY)
+            self.screen.blit(instruction, (self.width // 2 - instruction.get_width() // 2, 380))
 
             pygame.display.flip()
             self.clock.tick(FPS)
@@ -419,14 +479,45 @@ class GameGUI:
             self.text_cache[cache_key] = font.render(text, True, color)
         return self.text_cache[cache_key]
     
+    def format_time(self, seconds):
+        """Format time in minutes:seconds."""
+        minutes = int(seconds // 60)
+        seconds = int(seconds % 60)
+        return f"{minutes:02d}:{seconds:02d}"
+    
     def draw_ui(self):
         """Draw the user interface elements."""
-        # Remove player stats info from UI during gameplay
-        
-        # Only show game message
+        # Game message
         if self.message and pygame.time.get_ticks() < self.message_timer:
             message_text = self.render_text(FONT_MEDIUM, self.message, BLUE)
-            self.screen.blit(message_text, (self.width // 2 - message_text.get_width() // 2, 50))
+            self.screen.blit(message_text, (self.width // 2 - message_text.get_width() // 2, 20))
+        
+        # Only draw game stats if a game is active
+        if self.game and self.game.game_active:
+            # Calculate errors (mismatches)
+            total_matches = self.game.player.matches
+            total_attempts = self.game.player.moves
+            errors = max(0, total_attempts - total_matches)
+            
+            # Calculate elapsed time
+            current_time = self.game.scoreboard.current_game_stats["start_time"]
+            elapsed_time = time.time() - current_time
+            
+            # Draw stats background - create semi-transparent background
+            stats_rect = pygame.Rect(10, 10, 200, 70)
+            stats_bg = pygame.Surface((stats_rect.width, stats_rect.height), pygame.SRCALPHA)
+            stats_bg.fill((0, 0, 0, 128))  # Semi-transparent black
+            self.screen.blit(stats_bg, stats_rect)
+            pygame.draw.rect(self.screen, BLUE, stats_rect, 2, 5)
+            
+            # Draw stats text
+            player_text = self.render_text(FONT_SMALL, f"Player: {self.player_name}", WHITE)
+            errors_text = self.render_text(FONT_SMALL, f"Errors: {errors}", WHITE)
+            time_text = self.render_text(FONT_SMALL, f"Time: {self.format_time(elapsed_time)}", WHITE)
+            
+            self.screen.blit(player_text, (stats_rect.x + 10, stats_rect.y + 10))
+            self.screen.blit(errors_text, (stats_rect.x + 10, stats_rect.y + 30))
+            self.screen.blit(time_text, (stats_rect.x + 10, stats_rect.y + 50))
     
     def show_message(self, message, duration=2000):
         """Show a message for a duration in milliseconds."""
@@ -442,8 +533,11 @@ class GameGUI:
         
         self.screen.blit(self.overlay_surface, (0, 0))
         
-        # Game over text
-        game_over_text = FONT_LARGE.render(f"¡FELICIDADES {self.player_name}!", True, YELLOW)
+        # Game over text - handle empty player name gracefully
+        if self.player_name:
+            game_over_text = FONT_LARGE.render(f"¡FELICIDADES {self.player_name}!", True, YELLOW)
+        else:
+            game_over_text = FONT_LARGE.render("¡FELICIDADES!", True, YELLOW)
         self.screen.blit(game_over_text, (self.width // 2 - game_over_text.get_width() // 2, 160))
         
         # Calculate time taken
@@ -456,7 +550,7 @@ class GameGUI:
         
         # Show only time and errors as requested
         errors_text = self.render_text(FONT_MEDIUM, f"Errors: {errors}", WHITE)
-        time_text = self.render_text(FONT_MEDIUM, f"Time: {time_taken:.1f} seconds", WHITE)
+        time_text = self.render_text(FONT_MEDIUM, f"Time: {self.format_time(time_taken)}", WHITE)
         
         # Center the stats
         self.screen.blit(errors_text, (self.width // 2 - errors_text.get_width() // 2, 240))
@@ -514,7 +608,12 @@ class GameGUI:
             is_flipping_up = not card.is_face_up
             self.flipping_cards.append((card, pygame.time.get_ticks(), is_flipping_up))
             
-            # Actually flip the card in the game after a small delay
+            # Actually flip the card in the game model right away to prevent the bug
+            # where rapid clicking causes the first card to be lost
+            if is_flipping_up:
+                card.is_face_up = True
+            
+            # Set a timer event to handle the post-animation logic
             pygame.time.set_timer(pygame.USEREVENT, 150, 1)  # One-time event
     
     def check_game_over(self):
@@ -538,7 +637,7 @@ class GameGUI:
         running = True
         
         # Get player name before starting
-        self.player_name = self.get_player_name()  # Modifica esta línea
+        self.player_name = self.get_player_name()
         
         # Pre-create often used surfaces to avoid recreation
         self.overlay_surface = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
@@ -600,6 +699,15 @@ class GameGUI:
                                 if card and not card.is_matched and not card.is_face_up:
                                     # Start flip animation
                                     self.flip_card_animation(row, col)
+                                    
+                                    # Check if this is the second card being flipped
+                                    face_up_cards = [c for c in self.game.board.cards 
+                                                   if c.is_face_up and not c.is_matched]
+                                    
+                                    # If we now have 2 cards face up, process the match check after animation
+                                    if len(face_up_cards) == 2:
+                                        # Set a timer to check for matches
+                                        pygame.time.set_timer(pygame.USEREVENT, 150, 1)
                     
                     elif event.type == pygame.KEYDOWN:
                         if event.key == pygame.K_ESCAPE:
@@ -607,20 +715,26 @@ class GameGUI:
                             game_active = False
                     
                     elif event.type == pygame.USEREVENT:
-                        # This is our delayed flip event
-                        pos = pygame.mouse.get_pos()
-                        card_pos = self.get_card_at_pos(pos)
+                        # Check for matches
+                        face_up_cards = [c for c in self.game.board.cards 
+                                       if c.is_face_up and not c.is_matched]
                         
-                        if card_pos:
-                            row, col = card_pos
-                            result = self.game.flip_card(row, col)
+                        if len(face_up_cards) == 2:
+                            # We have two cards face up, process the match
+                            card1, card2 = face_up_cards
+                            row1, col1 = self.game.board.get_card_position(card1.card_id)
+                            row2, col2 = self.game.board.get_card_position(card2.card_id)
+                            
+                            # Record the move in the game
+                            result = self.game.check_match(row1, col1, row2, col2)
+                            
                             if "Match found" in result:
                                 self.show_message(f"Match found! +10 points", 1500)
                                 
                                 # Start match animation
                                 self.match_animation_active = True
                                 self.match_animation_start = pygame.time.get_ticks()
-                                self.match_animation_cards = self.game.board.flipped_cards.copy()
+                                self.match_animation_cards = face_up_cards.copy()
                                 
                                 if "Game Over" in result:
                                     # Game is over, show end screen after a delay
@@ -629,16 +743,15 @@ class GameGUI:
                                     # Clear any message when game ends
                                     self.message = ""
                                     self.message_timer = 0
-                            
-                            # Check if we need to flip cards back after a delay
-                            if len(self.game.board.flipped_cards) == 2 and not "Match found" in result:
+                            else:
+                                # Not a match, schedule to flip them back
                                 waiting_for_flip_back = True
                                 flip_back_time = pygame.time.get_ticks() + 1500  # 1.5 seconds
                                 
-                                # Start shake animation instead of showing a message
+                                # Start shake animation
                                 self.shake_animation_active = True
                                 self.shake_animation_start = pygame.time.get_ticks()
-                                self.shake_animation_cards = self.game.board.flipped_cards.copy()
+                                self.shake_animation_cards = face_up_cards.copy()
                     
                     elif event.type == pygame.USEREVENT + 1:
                         # Game over event - show congratulation screen
