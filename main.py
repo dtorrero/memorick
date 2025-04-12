@@ -361,7 +361,17 @@ class GameGUI:
                         color = GREEN
                     else:
                         color = BLACK
-                    text = FONT_CARD.render(str(card.value), True, color)
+                        
+                    # Use smaller font for multi-character values
+                    value_str = str(card.value)
+                    if len(value_str) > 1:
+                        # For multi-character values, use a smaller font (25% smaller than before)
+                        text_size = max(int(FONT_CARD.get_height() * 0.5), 18)  # Reduced from 0.7 to 0.5 (about 25% smaller)
+                        card_font = pygame.font.SysFont('Arial', text_size, bold=True)
+                    else:
+                        card_font = FONT_CARD
+                    
+                    text = card_font.render(value_str, True, color)
                     self.screen.blit(text, (adjusted_rect.centerx - text.get_width() // 2, 
                                           adjusted_rect.centery - text.get_height() // 2))
             else:
@@ -382,14 +392,34 @@ class GameGUI:
                 # Matched cards
                 pygame.draw.rect(self.screen, CARD_MATCHED_COLOR, rect, 0, 5)
                 pygame.draw.rect(self.screen, GREEN, rect, 2, 5)
-                text = FONT_CARD.render(str(card.value), True, GREEN)
+                
+                # Use smaller font for multi-character values
+                value_str = str(card.value)
+                if len(value_str) > 1:
+                    # For multi-character values, use a smaller font (25% smaller than before)
+                    text_size = max(int(FONT_CARD.get_height() * 0.5), 18)  # Reduced from 0.7 to 0.5 (about 25% smaller)
+                    card_font = pygame.font.SysFont('Arial', text_size, bold=True)
+                else:
+                    card_font = FONT_CARD
+                
+                text = card_font.render(value_str, True, GREEN)
                 self.screen.blit(text, (rect.centerx - text.get_width() // 2, 
                                       rect.centery - text.get_height() // 2))
             elif card.is_face_up:
                 # Face up cards
                 pygame.draw.rect(self.screen, CARD_FRONT_COLOR, rect, 0, 5)
                 pygame.draw.rect(self.screen, BLUE, rect, 2, 5)
-                text = FONT_CARD.render(str(card.value), True, BLACK)
+                
+                # Use smaller font for multi-character values
+                value_str = str(card.value)
+                if len(value_str) > 1:
+                    # For multi-character values, use a smaller font (25% smaller than before)
+                    text_size = max(int(FONT_CARD.get_height() * 0.5), 18)  # Reduced from 0.7 to 0.5 (about 25% smaller)
+                    card_font = pygame.font.SysFont('Arial', text_size, bold=True)
+                else:
+                    card_font = FONT_CARD
+                
+                text = card_font.render(value_str, True, BLACK)
                 self.screen.blit(text, (rect.centerx - text.get_width() // 2, 
                                       rect.centery - text.get_height() // 2))
             else:
@@ -555,9 +585,9 @@ class GameGUI:
         
         # Game over text - handle empty player name gracefully
         if self.player_name:
-            game_over_text = FONT_LARGE.render(f"¡FELICIDADES {self.player_name}!", True, YELLOW)
+            game_over_text = FONT_LARGE.render(f"Congratulations! {self.player_name}!", True, YELLOW)
         else:
-            game_over_text = FONT_LARGE.render("¡FELICIDADES!", True, YELLOW)
+            game_over_text = FONT_LARGE.render("Congratulations!", True, YELLOW)
         self.screen.blit(game_over_text, (self.width // 2 - game_over_text.get_width() // 2, 160))
         
         # Calculate time taken
@@ -809,9 +839,12 @@ class GameGUI:
                     # Calculate filtered stats for the selected difficulty
                     total_games = len(difficulty_stats)
                     completed_games = sum(1 for stat in difficulty_stats if stat["completed"])
-                    total_time = sum(stat["duration_seconds"] for stat in difficulty_stats)
-                    avg_time = total_time / total_games if total_games > 0 else 0
-                    best_time = min((stat["duration_seconds"] for stat in difficulty_stats if stat["completed"]), default=0)
+                    
+                    # Only use completed games for time calculations
+                    completed_stats = [stat for stat in difficulty_stats if stat["completed"]]
+                    total_time = sum(stat["duration_seconds"] for stat in completed_stats)
+                    avg_time = total_time / len(completed_stats) if completed_stats else 0
+                    best_time = min((stat["duration_seconds"] for stat in completed_stats), default=0)
                     
                     # Player stats section
                     stats_y = 380
