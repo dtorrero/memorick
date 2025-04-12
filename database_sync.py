@@ -46,7 +46,14 @@ class SyncGameDatabase(OriginalGameDatabase):
         # Use a different database file for remote mode to ensure isolation
         remote_db_file = "remote_" + db_file
         super().__init__(remote_db_file)
+        
+        # Ensure server_url has the correct format with http:// prefix
+        if server_url and not server_url.startswith(('http://', 'https://')):
+            server_url = 'http://' + server_url
+        
         self.server_url = server_url
+        print(f"Initializing sync database with server URL: {self.server_url}")
+        
         self.sync_queue = []  # Queue for stats to be synced
         self.online = False   # Assume offline until we verify connection
         
@@ -64,13 +71,22 @@ class SyncGameDatabase(OriginalGameDatabase):
     def check_server_connection(self):
         """Check if the server is available."""
         try:
-            response = requests.get(f"{self.server_url}/", timeout=2)
+            print(f"Checking server connection to: {self.server_url}")
+            response = requests.get(f"{self.server_url}/", timeout=5)
             self.online = response.status_code == 200
-            print(f"Server connection: {'Online' if self.online else 'Offline'}")
+            print(f"Server connection: {'Online' if self.online else 'Offline'} (Status code: {response.status_code})")
             return self.online
-        except:
+        except requests.exceptions.ConnectionError as e:
             self.online = False
-            print("Server connection: Offline (unable to connect)")
+            print(f"Server connection failed (ConnectionError): {e}")
+            return False
+        except requests.exceptions.Timeout as e:
+            self.online = False
+            print(f"Server connection timeout: {e}")
+            return False
+        except Exception as e:
+            self.online = False
+            print(f"Server connection error: {e}")
             return False
     
     def initialize_sync_table(self):
@@ -161,12 +177,22 @@ class SyncGameDatabase(OriginalGameDatabase):
                 "completed": bool(row[8])
             }
             
+            # Debug info
+            print(f"Attempting to sync to server: {self.server_url}")
+            print(f"Sync data: {stats_data}")
+            
             # Send to server
+            url = f"{self.server_url}/api/stats/save"
+            print(f"Sending data to: {url}")
+            
             response = requests.post(
-                f"{self.server_url}/api/stats/save",
+                url,
                 json=stats_data,
-                timeout=5
+                timeout=10  # Increase timeout for slower connections
             )
+            
+            print(f"Server response: Status {response.status_code}")
+            print(f"Response content: {response.text}")
             
             # Update sync status
             if response.status_code == 200:
@@ -274,6 +300,45 @@ class SyncGameDatabase(OriginalGameDatabase):
         except Exception as e:
             print(f"Failed to get remote player stats: {e}")
             return {"player": player_name, "stats": []}  # Empty stats instead of local data
+    
+    def force_sync_all(self):
+        """
+        Force immediate synchronization of all pending game stats.
+        Returns the number of successfully synced items.
+        """
+        if not self.online and not self.check_server_connection():
+            print("Cannot force sync: Server is offline")
+            return 0
+            
+        try:
+            # Get all unsynced items
+            self.cursor.execute('''
+                SELECT game_stats_id
+                FROM sync_status
+                WHERE synced = 0
+            ''')
+            
+            items = self.cursor.fetchall()
+            if not items:
+                print("No items pending synchronization")
+                return 0
+                
+            print(f"Force syncing {len(items)} items...")
+            
+            synced_count = 0
+            for item in items:
+                game_stats_id = item[0]
+                if self.sync_game_stat(game_stats_id):
+                    synced_count += 1
+                # Small delay to avoid overwhelming the server
+                time.sleep(0.5)
+                
+            print(f"Forced sync complete. Successfully synced {synced_count}/{len(items)} items")
+            return synced_count
+            
+        except Exception as e:
+            print(f"Error during force sync: {e}")
+            return 0
 
 
 # Singleton instance for use throughout the application
@@ -291,6 +356,7 @@ def get_sync_database(server_url=None) -> SyncGameDatabase:
     
     # If a custom server URL is provided, create a new instance
     if server_url and server_url != sync_db.server_url:
+        print(f"Creating new sync database instance with server URL: {server_url}")
         sync_db = SyncGameDatabase(server_url=server_url)
         
     return sync_db 

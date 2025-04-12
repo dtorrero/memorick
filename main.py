@@ -220,7 +220,8 @@ class GameGUI:
                     
                     if radio_remote_rect.collidepoint(event.pos):
                         db_mode = "remote"
-                        server_url_active = True
+                        server_url_active = False
+                        input_active = False
                     
                     # Check if server URL input field was clicked
                     if server_url_rect.collidepoint(event.pos):
@@ -230,6 +231,15 @@ class GameGUI:
                     elif input_rect.collidepoint(event.pos):
                         server_url_active = False
                         input_active = True
+                    
+                    # Force sync button (only in remote mode)
+                    if db_mode == "remote" and 'force_sync_rect' in locals() and force_sync_rect.collidepoint(event.pos):
+                        # Force sync all pending game stats
+                        from database_sync import get_sync_database
+                        db = get_sync_database(server_url=server_url_input)
+                        synced_count = db.force_sync_all()
+                        connection_status = f"Synced {synced_count} items"
+                        connection_color = BLUE
                 
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_RETURN:
@@ -392,6 +402,21 @@ class GameGUI:
                     instruction = FONT_SMALL.render("Press ENTER or click OK to continue", True, GRAY)
             self.screen.blit(instruction, (self.width // 2 - instruction.get_width() // 2, 430))
 
+            # Dynamic button based on database mode
+            if db_mode == "remote":
+                remote_status = FONT_SMALL.render("Remote Mode", True, BLUE)
+                self.screen.blit(remote_status, (self.width - 150, 10))
+                
+                # Force Sync button
+                force_sync_rect = pygame.Rect(self.width - 150, self.height - 50, 140, 40)
+                pygame.draw.rect(self.screen, BLUE, force_sync_rect, border_radius=5)
+                force_sync_text = FONT_SMALL.render("Force Sync", True, WHITE)
+                self.screen.blit(force_sync_text, (force_sync_rect.x + (force_sync_rect.width - force_sync_text.get_width()) // 2, 
+                                                force_sync_rect.y + (force_sync_rect.height - force_sync_text.get_height()) // 2))
+            else:
+                local_status = FONT_SMALL.render("Local Mode", True, GREEN)
+                self.screen.blit(local_status, (self.width - 150, 10))
+            
             pygame.display.flip()
             self.clock.tick(FPS)
     

@@ -87,6 +87,7 @@ def save_stats():
     """Save game statistics from the client."""
     try:
         data = request.json
+        print(f"Received save request with data: {data}")
         
         # Validate required fields
         required_fields = ['player_name', 'difficulty', 'start_time', 
@@ -94,6 +95,7 @@ def save_stats():
         
         for field in required_fields:
             if field not in data:
+                print(f"Missing required field: {field}")
                 return jsonify({"error": f"Missing required field: {field}"}), 400
         
         # Calculate derived fields if not provided
@@ -105,6 +107,10 @@ def save_stats():
         
         # Add sync time
         sync_time = time.time()
+        
+        # Log client ID if provided
+        client_id = data.get('client_id', 'unknown')
+        print(f"Saving game stats from client: {client_id}")
         
         # Save to database
         conn = sqlite3.connect(DB_PATH)
@@ -124,6 +130,7 @@ def save_stats():
         record_id = cursor.lastrowid
         conn.close()
         
+        print(f"Successfully saved stats with ID: {record_id}")
         return jsonify({
             "success": True, 
             "message": "Statistics saved successfully",
@@ -131,6 +138,7 @@ def save_stats():
         })
     
     except Exception as e:
+        print(f"Error saving stats: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/stats/leaderboard/<difficulty>', methods=['GET'])
