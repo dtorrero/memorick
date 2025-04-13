@@ -1018,22 +1018,6 @@ class GameGUI:
     
     def show_stats_screen(self):
         """Show player statistics and leaderboards."""
-        # Force sync before showing stats if in remote mode
-        if self.db_mode == "remote":
-            try:
-                from database_sync import get_sync_database
-                db = get_sync_database(server_url=self.server_url)
-                db.force_sync_all()
-                # Brief notification that sync was performed
-                self.screen.fill(WHITE)
-                sync_msg = FONT_SMALL.render("Syncing with server...", True, BLUE)
-                self.screen.blit(sync_msg, (self.width // 2 - sync_msg.get_width() // 2, self.height // 2))
-                pygame.display.flip()
-                # Wait a moment for the user to see the message
-                pygame.time.wait(500)
-            except Exception as e:
-                print(f"Error syncing before stats: {str(e)}")
-        
         # Reset the screen
         self.screen.fill(WHITE)
         
@@ -1064,9 +1048,22 @@ class GameGUI:
         # Refresh button
         refresh_rect = pygame.Rect(self.width - 150, 520, 130, 40)
         
+        # Reset cache button (only shown if needed)
+        reset_cache_rect = pygame.Rect(10, 520, 150, 40)
+        show_reset_button = False
+        cache_reset_message = ""
+        cache_message_timer = 0
+        
         # Counter for refresh intervals - increase to 15 seconds to reduce server load
         last_refresh_time = 0
         refresh_interval = 15000  # milliseconds (15 seconds instead of 3)
+        
+        # Variables for tracking server reset detection
+        server_reset_detected = False
+        
+        # Initial data load
+        db = None
+        using_cached_data = False
         
         # Main loop for stats screen
         running = True
@@ -1077,7 +1074,7 @@ class GameGUI:
             should_refresh = (current_time - last_refresh_time > refresh_interval)
             
             # Get fresh database instance each iteration to ensure updated data
-            if should_refresh:
+            if should_refresh or db is None:
                 # Show refresh indicator
                 refresh_msg = FONT_SMALL.render("Refreshing data...", True, BLUE)
                 refresh_rect_msg = pygame.Rect(10, self.height - 30, refresh_msg.get_width() + 10, refresh_msg.get_height() + 5)
@@ -1092,6 +1089,7 @@ class GameGUI:
                 if self.db_mode == "local":
                     from database import get_database
                     db = get_database()
+                    using_cached_data = False
                 else:  # Remote mode
                     from database_sync import get_sync_database
                     # Create a completely new instance to bypass any caching
@@ -1099,12 +1097,24 @@ class GameGUI:
                     importlib.reload(sys.modules.get('database_sync', None))
                     from database_sync import get_sync_database
                     db = get_sync_database(server_url=self.server_url)
+                    
+                    # Check for server reset detection
+                    if hasattr(db, 'detect_server_reset'):
+                        server_reset_detected = db.detect_server_reset()
+                        if server_reset_detected:
+                            show_reset_button = True
                 
                 # Refresh leaderboard data for each tab
                 print("!!! REFRESHING LEADERBOARD DATA !!!")
                 tabs[0]["data"] = db.get_leaderboard(difficulty="Easy", limit=5)
                 tabs[1]["data"] = db.get_leaderboard(difficulty="Medium", limit=5)
                 tabs[2]["data"] = db.get_leaderboard(difficulty="Hard", limit=5)
+                
+                # Check if we're using cached data (for remote mode)
+                if self.db_mode == "remote" and hasattr(db, 'using_cached_data'):
+                    using_cached_data = db.using_cached_data
+                    if using_cached_data:
+                        show_reset_button = True
                 
                 # Update refresh time
                 last_refresh_time = current_time
@@ -1131,6 +1141,18 @@ class GameGUI:
             
             # Draw title
             self.screen.blit(title, (self.width // 2 - title.get_width() // 2, 30))
+            
+            # Draw cached data warning if applicable
+            if using_cached_data and self.db_mode == "remote":
+                warning_msg = FONT_SMALL.render("⚠️ Showing cached data - server may be offline", True, (255, 140, 0))  # Orange warning
+                pygame.draw.rect(self.screen, (255, 250, 205), pygame.Rect((self.width // 2 - warning_msg.get_width() // 2) - 5, 70, warning_msg.get_width() + 10, warning_msg.get_height() + 5), 0, 5)
+                self.screen.blit(warning_msg, (self.width // 2 - warning_msg.get_width() // 2, 70))
+            
+            # Draw server reset warning if detected
+            if server_reset_detected and self.db_mode == "remote":
+                reset_msg = FONT_SMALL.render("⚠️ Server database has been reset!", True, RED)
+                pygame.draw.rect(self.screen, (255, 220, 220), pygame.Rect((self.width // 2 - reset_msg.get_width() // 2) - 5, 70, reset_msg.get_width() + 10, reset_msg.get_height() + 5), 0, 5)
+                self.screen.blit(reset_msg, (self.width // 2 - reset_msg.get_width() // 2, 70))
             
             # Draw tabs
             for i, tab in enumerate(tabs):
@@ -1192,15 +1214,20 @@ class GameGUI:
                         str(entry["errors"])
                     ]
                     
+                    # Determine row color based on whether this is cached data
+                    row_color = BLACK
+                    if entry.get("cached", False):
+                        row_color = (100, 100, 100)  # Gray for cached entries
+                    
                     for j, data in enumerate(row_data):
-                        data_text = FONT_SMALL.render(data, True, BLACK)
+                        data_text = FONT_SMALL.render(data, True, row_color)
                         self.screen.blit(data_text, (row_x, row_y))
                         row_x += header_widths[j]
             else:
                 no_data_text = FONT_MEDIUM.render("No games played yet!", True, GRAY)
                 self.screen.blit(no_data_text, (self.width // 2 - no_data_text.get_width() // 2, 280))
             
-            # Draw personal stats for current player if available
+            # Draw player stats section as before...
             if self.player_name:
                 # Get stats filtered by the currently selected difficulty
                 current_difficulty = tabs[selected_tab]["name"]
@@ -1270,6 +1297,35 @@ class GameGUI:
             if mouse_clicked and refresh_rect.collidepoint(mouse_pos):
                 # Force a refresh by setting the timer to zero
                 last_refresh_time = 0
+            
+            # Draw reset cache button if local cache needs to be cleared
+            if show_reset_button and self.db_mode == "remote":
+                reset_btn_color = RED if reset_cache_rect.collidepoint(mouse_pos) else (200, 100, 100)
+                pygame.draw.rect(self.screen, reset_btn_color, reset_cache_rect, 0, 10)
+                pygame.draw.rect(self.screen, BLACK, reset_cache_rect, 2, 10)
+                
+                reset_btn_text = FONT_SMALL.render("Reset Local Cache", True, WHITE)
+                self.screen.blit(reset_btn_text, (reset_cache_rect.centerx - reset_btn_text.get_width() // 2,
+                                               reset_cache_rect.centery - reset_btn_text.get_height() // 2))
+                
+                # Handle reset cache button click
+                if mouse_clicked and reset_cache_rect.collidepoint(mouse_pos):
+                    if hasattr(db, 'prompt_reset_local_cache'):
+                        if db.prompt_reset_local_cache():
+                            cache_reset_message = "Cache reset successfully!"
+                            cache_message_timer = current_time + 3000  # Show for 3 seconds
+                            # Force a refresh to see changes
+                            last_refresh_time = 0
+                            server_reset_detected = False
+            
+            # Show cache reset message if active
+            if cache_reset_message and current_time < cache_message_timer:
+                msg = FONT_SMALL.render(cache_reset_message, True, GREEN)
+                msg_rect = pygame.Rect(reset_cache_rect.x, reset_cache_rect.y - 30, 
+                                     msg.get_width() + 10, msg.get_height() + 5)
+                pygame.draw.rect(self.screen, WHITE, msg_rect)
+                pygame.draw.rect(self.screen, GREEN, msg_rect, 1, 5)
+                self.screen.blit(msg, (reset_cache_rect.x + 5, reset_cache_rect.y - 25))
             
             pygame.display.flip()
             self.clock.tick(FPS)

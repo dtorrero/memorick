@@ -237,6 +237,24 @@ def get_player_stats(name):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route('/api/stats/count', methods=['GET'])
+def get_stats_count():
+    """Return the total count of game stats records."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        # Get total count of records
+        cursor.execute('SELECT COUNT(*) as count FROM game_stats')
+        result = cursor.fetchone()
+        count = result['count'] if result else 0
+        
+        conn.close()
+        return jsonify({"count": count, "status": "success"})
+    except Exception as e:
+        return jsonify({"error": str(e), "status": "error"}), 500
+
 if __name__ == '__main__':
     # Initialize the database on startup
     init_db()
