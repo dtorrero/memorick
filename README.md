@@ -196,3 +196,37 @@ docker run -p 5000:5000 memory-game-server
 # Run the client (Linux only, with X11 forwarding)
 docker run -e DISPLAY=$DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix memory-game-client
 ```
+
+## Concurrency and Reliability
+
+The game implements robust mechanisms to ensure data integrity and reliability when multiple players use the system simultaneously:
+
+### Retry System for Data Persistence
+
+The client includes an intelligent retry system for saving game statistics to the server:
+
+- **Automatic Retries**: Failed save operations automatically retry up to 5 times
+- **Exponential Backoff**: Each retry uses an increasing delay (1s, 2s, 4s, 8s, 16s) to avoid overwhelming the server
+- **Smart Error Handling**: Only retries on server errors (5xx) or rate limiting (429), not on client errors (most 4xx)
+- **Increasing Timeouts**: Each retry attempt gets a progressively longer timeout, from 10s to 30s
+- **Random Jitter**: Added randomization to delay times to prevent multiple clients retrying simultaneously
+
+### Duplicate Prevention
+
+The server implements comprehensive duplicate detection to prevent the same game record from being saved multiple times:
+
+- **Multi-Field Matching**: Uses client ID, local record ID, player name, and precise timestamps to identify duplicates
+- **Conflict Responses**: Returns HTTP 409 (Conflict) when duplicates are detected, along with the existing record ID
+- **Database Indices**: Optimized database schema with indices for efficient duplicate detection
+- **Transparent Handling**: Players don't see any difference in behavior when retries or duplicate detection occur
+
+### Benefits
+
+These mechanisms provide several key advantages:
+
+- **Data Integrity**: Ensures game statistics are reliably saved even during high server load
+- **Consistent Experience**: Players always see their completed games in the leaderboards
+- **Server Protection**: Prevents server overload during concurrent game completions
+- **Transparent Operation**: All reliability mechanisms work silently in the background
+
+The system is designed to handle 10+ concurrent players without data loss or duplicate entries, even when using SQLite as the database backend.
