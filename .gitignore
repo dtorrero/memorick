@@ -120,3 +120,6 @@ game_settings.json
 
 # Client identification
 .client_id
+
+# User settings
+settings.json

@@ -3,6 +3,8 @@ import sys
 import time
 import gc  # Import garbage collector module at the top level
 import math
+import json
+import os
 from classes import Card, Board, Player, Game
 from database import get_database
 
@@ -14,6 +16,28 @@ pygame.font.init()
 
 # Add imports for server functionality
 import os
+
+# Settings management
+SETTINGS_FILE = "settings.json"
+DEFAULT_SERVER = "localhost:5000"  # Default server if no settings file exists
+
+def load_settings():
+    """Load settings from settings.json file."""
+    if os.path.exists(SETTINGS_FILE):
+        try:
+            with open(SETTINGS_FILE, 'r') as f:
+                return json.load(f)
+        except json.JSONDecodeError:
+            return {"server_url": DEFAULT_SERVER}
+    return {"server_url": DEFAULT_SERVER}
+
+def save_settings(settings):
+    """Save settings to settings.json file."""
+    with open(SETTINGS_FILE, 'w') as f:
+        json.dump(settings, f)
+
+# Load settings at startup
+SETTINGS = load_settings()
 
 # Colors
 WHITE = (255, 255, 255)
@@ -137,7 +161,7 @@ class GameGUI:
         cursor_blink_time = 500  # milliseconds
         
         # Server configuration
-        server_url_input = "http://localhost:5000"  # Default server URL
+        server_url_input = SETTINGS.get("server_url", DEFAULT_SERVER)  # Load from settings
         server_url_active = False
         server_url_rect = pygame.Rect(self.width // 2 - 140, 385, 280, 40)  # Moved down below radio buttons
         
@@ -185,15 +209,23 @@ class GameGUI:
                         # If using remote database, check connection before proceeding
                         if db_mode == "remote":
                             try:
-                                # Test server connection
                                 import requests
-                                response = requests.get(f"{server_url_input}/", timeout=2)
+                                # Add HTTP prefix for connection (not shown in UI)
+                                server_url_with_prefix = f"http://{server_url_input}"
+                                print(f"Attempting to connect to: {server_url_with_prefix}")
+                                # Make sure we're connecting to the root endpoint
+                                if not server_url_with_prefix.endswith("/"):
+                                    server_url_with_prefix += "/"
+                                response = requests.get(server_url_with_prefix, timeout=2)
                                 if response.status_code == 200:
                                     connection_status = "Connected"
                                     connection_status_color = GREEN
-                                    # Store in global configuration
-                                    self.server_url = server_url_input
+                                    # Store in global configuration and save settings
+                                    self.server_url = server_url_with_prefix
                                     self.db_mode = db_mode
+                                    # Save to settings file
+                                    SETTINGS["server_url"] = server_url_input
+                                    save_settings(SETTINGS)
                                     return input_text.strip()
                                 else:
                                     connection_status = "Error: Server returned status " + str(response.status_code)
@@ -239,13 +271,22 @@ class GameGUI:
                                 # Test server connection
                                 try:
                                     import requests
-                                    response = requests.get(f"{server_url_input}/", timeout=2)
+                                    # Add HTTP prefix for connection (not shown in UI)
+                                    server_url_with_prefix = f"http://{server_url_input}"
+                                    print(f"Attempting to connect to: {server_url_with_prefix}")
+                                    # Make sure we're connecting to the root endpoint
+                                    if not server_url_with_prefix.endswith("/"):
+                                        server_url_with_prefix += "/"
+                                    response = requests.get(server_url_with_prefix, timeout=2)
                                     if response.status_code == 200:
                                         connection_status = "Connected"
                                         connection_status_color = GREEN
-                                        # Store in global configuration
-                                        self.server_url = server_url_input
+                                        # Store in global configuration and save settings
+                                        self.server_url = server_url_with_prefix
                                         self.db_mode = db_mode
+                                        # Save to settings file
+                                        SETTINGS["server_url"] = server_url_input
+                                        save_settings(SETTINGS)
                                         return input_text.strip()
                                     else:
                                         connection_status = "Error: Server returned status " + str(response.status_code)
@@ -282,10 +323,17 @@ class GameGUI:
                                 if event.unicode != " " or (input_text and input_text[-1] != " "):
                                     input_text += event.unicode
                         elif server_url_active and db_mode == "remote":
-                            # Allow URL characters for server URL
-                            valid_url_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~:/?#[]@!$&'()*+,;="
+                            # Allow only characters valid for host:port format
+                            valid_url_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._:"
                             if event.unicode in valid_url_chars:
-                                server_url_input += event.unicode
+                                # Don't allow protocol prefix
+                                if event.unicode == ":" and ":" in server_url_input:
+                                    # Only allow one colon for host:port format
+                                    if server_url_input.count(":") < 1:
+                                        server_url_input += event.unicode
+                                elif event.unicode != ":" or not server_url_input.endswith(":"):
+                                    # Don't allow consecutive colons
+                                    server_url_input += event.unicode
             
             # Redraw the screen
             self.screen.fill(WHITE)
@@ -335,7 +383,7 @@ class GameGUI:
             # Draw server URL input box (only if remote mode is selected)
             if db_mode == "remote":
                 # Draw server URL label above the input field
-                url_label = FONT_SMALL.render("Server URL:", True, BLUE if server_url_active else BLACK)
+                url_label = FONT_SMALL.render("Server Address (host:port):", True, BLUE if server_url_active else BLACK)
                 self.screen.blit(url_label, (server_url_rect.x, server_url_rect.y - 25))
                 
                 box_color = BLUE if server_url_active else GRAY

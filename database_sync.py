@@ -51,6 +51,10 @@ class SyncGameDatabase(OriginalGameDatabase):
         if server_url and not server_url.startswith(('http://', 'https://')):
             server_url = 'http://' + server_url
         
+        # Ensure URL ends with a trailing slash for consistency
+        if server_url and not server_url.endswith('/'):
+            server_url += '/'
+            
         self.server_url = server_url
         print(f"Initializing sync database with server URL: {self.server_url}")
         
@@ -72,7 +76,12 @@ class SyncGameDatabase(OriginalGameDatabase):
         """Check if the server is available."""
         try:
             print(f"Checking server connection to: {self.server_url}")
-            response = requests.get(f"{self.server_url}/", timeout=5)
+            # Ensure we're connecting to the base URL
+            url = self.server_url
+            if not url.endswith('/'):
+                url += '/'
+                
+            response = requests.get(url, timeout=5)
             self.online = response.status_code == 200
             print(f"Server connection: {'Online' if self.online else 'Offline'} (Status code: {response.status_code})")
             return self.online
@@ -182,7 +191,9 @@ class SyncGameDatabase(OriginalGameDatabase):
             print(f"Sync data: {stats_data}")
             
             # Send to server
-            url = f"{self.server_url}/api/stats/save"
+            # Construct API endpoint correctly, ensuring no double slashes
+            base_url = self.server_url.rstrip('/')
+            url = f"{base_url}/api/stats/save"
             print(f"Sending data to: {url}")
             
             response = requests.post(
@@ -275,7 +286,10 @@ class SyncGameDatabase(OriginalGameDatabase):
             
             # Try to get remote leaderboard with cache busting parameter
             difficulty_param = difficulty if difficulty else "all"
-            url = f"{self.server_url}/api/stats/leaderboard/{difficulty_param}"
+            
+            # Construct API endpoint correctly, ensuring no double slashes
+            base_url = self.server_url.rstrip('/')
+            url = f"{base_url}/api/stats/leaderboard/{difficulty_param}"
             
             # Add cache busting parameter to prevent browser/request caching
             cache_buster = int(time.time() * 1000)  # Use milliseconds for more uniqueness
@@ -336,7 +350,10 @@ class SyncGameDatabase(OriginalGameDatabase):
             # Add cache busting parameter to prevent browser/request caching
             cache_buster = int(time.time() * 1000)  # Use milliseconds for more uniqueness
             
-            url = f"{self.server_url}/api/stats/player/{player_name}"
+            # Construct API endpoint correctly, ensuring no double slashes
+            base_url = self.server_url.rstrip('/')
+            url = f"{base_url}/api/stats/player/{player_name}"
+            
             print(f"!!! Fetching fresh player stats from: {url}?t={cache_buster}")
             
             # Disable all caching mechanisms
