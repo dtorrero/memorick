@@ -1284,19 +1284,20 @@ class GameGUI:
             if mouse_clicked and back_rect.collidepoint(mouse_pos):
                 running = False
             
-            # Draw refresh button
-            refresh_btn_color = BLUE if refresh_rect.collidepoint(mouse_pos) else (100, 100, 200)
-            pygame.draw.rect(self.screen, refresh_btn_color, refresh_rect, 0, 10)
-            pygame.draw.rect(self.screen, BLACK, refresh_rect, 2, 10)
-            
-            refresh_btn_text = FONT_SMALL.render("Refresh Data", True, WHITE)
-            self.screen.blit(refresh_btn_text, (refresh_rect.centerx - refresh_btn_text.get_width() // 2,
-                                             refresh_rect.centery - refresh_btn_text.get_height() // 2))
-            
-            # Handle refresh button click
-            if mouse_clicked and refresh_rect.collidepoint(mouse_pos):
-                # Force a refresh by setting the timer to zero
-                last_refresh_time = 0
+            # Draw refresh button (only in remote mode)
+            if self.db_mode == "remote":
+                refresh_btn_color = BLUE if refresh_rect.collidepoint(mouse_pos) else (100, 100, 200)
+                pygame.draw.rect(self.screen, refresh_btn_color, refresh_rect, 0, 10)
+                pygame.draw.rect(self.screen, BLACK, refresh_rect, 2, 10)
+                
+                refresh_btn_text = FONT_SMALL.render("Refresh Data", True, WHITE)
+                self.screen.blit(refresh_btn_text, (refresh_rect.centerx - refresh_btn_text.get_width() // 2,
+                                                 refresh_rect.centery - refresh_btn_text.get_height() // 2))
+                
+                # Handle refresh button click
+                if mouse_clicked and refresh_rect.collidepoint(mouse_pos):
+                    # Force a refresh by setting the timer to zero
+                    last_refresh_time = 0
             
             # Draw reset cache button if local cache needs to be cleared
             if show_reset_button and self.db_mode == "remote":
