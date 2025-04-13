@@ -811,14 +811,55 @@ class GameGUI:
             self.overlay_surface = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
             self.overlay_surface.fill((0, 0, 0, 180))  # Semi-transparent black
         
-        self.screen.blit(self.overlay_surface, (0, 0))
+        def draw_game_over_screen():
+            # Start with a fresh overlay to avoid artifacts
+            self.screen.fill(WHITE)
+            self.screen.blit(self.overlay_surface, (0, 0))
+            
+            # Game over text - handle empty player name gracefully
+            if self.player_name:
+                game_over_text = FONT_LARGE.render(f"Congratulations! {self.player_name}!", True, YELLOW)
+            else:
+                game_over_text = FONT_LARGE.render("Congratulations!", True, YELLOW)
+            self.screen.blit(game_over_text, (self.width // 2 - game_over_text.get_width() // 2, 160))
+            
+            # Calculate errors (mismatches)
+            total_matches = self.game.player.matches
+            total_attempts = self.game.player.moves
+            errors = max(0, total_attempts - total_matches)
+            
+            # Draw time and errors
+            time_taken = self.game.scoreboard.current_game_stats["end_time"] - self.game.scoreboard.current_game_stats["start_time"]
+            errors_text = self.render_text(FONT_MEDIUM, f"Errors: {errors}", WHITE)
+            time_text = self.render_text(FONT_MEDIUM, f"Time: {self.format_time(time_taken)}", WHITE)
+            
+            # Center the stats
+            self.screen.blit(errors_text, (self.width // 2 - errors_text.get_width() // 2, 240))
+            self.screen.blit(time_text, (self.width // 2 - time_text.get_width() // 2, 280))
+            
+            # Play again button
+            play_again_rect = pygame.Rect(self.width // 2 - 100, 350, 200, 50)
+            pygame.draw.rect(self.screen, BLUE, play_again_rect, 0, 10)
+            pygame.draw.rect(self.screen, WHITE, play_again_rect, 2, 10)
+            
+            play_again_text = FONT_MEDIUM.render("Play Again", True, WHITE)
+            self.screen.blit(play_again_text, (play_again_rect.centerx - play_again_text.get_width() // 2, 
+                                            play_again_rect.centery - play_again_text.get_height() // 2))
+            
+            # Main menu button
+            menu_rect = pygame.Rect(self.width // 2 - 100, 420, 200, 50)
+            pygame.draw.rect(self.screen, GREEN, menu_rect, 0, 10)
+            pygame.draw.rect(self.screen, WHITE, menu_rect, 2, 10)
+            
+            menu_text = FONT_MEDIUM.render("Main Menu", True, WHITE)
+            self.screen.blit(menu_text, (menu_rect.centerx - menu_text.get_width() // 2, 
+                                        menu_rect.centery - menu_text.get_height() // 2))
+            
+            pygame.display.flip()
+            return play_again_rect, menu_rect
         
-        # Game over text - handle empty player name gracefully
-        if self.player_name:
-            game_over_text = FONT_LARGE.render(f"Congratulations! {self.player_name}!", True, YELLOW)
-        else:
-            game_over_text = FONT_LARGE.render("Congratulations!", True, YELLOW)
-        self.screen.blit(game_over_text, (self.width // 2 - game_over_text.get_width() // 2, 160))
+        # Draw the initial game over screen
+        play_again_rect, menu_rect = draw_game_over_screen()
         
         # Calculate time taken
         time_taken = self.game.scoreboard.current_game_stats["end_time"] - self.game.scoreboard.current_game_stats["start_time"]
@@ -843,33 +884,29 @@ class GameGUI:
             completed=True
         )
         
-        # Show only time and errors as requested
-        errors_text = self.render_text(FONT_MEDIUM, f"Errors: {errors}", WHITE)
-        time_text = self.render_text(FONT_MEDIUM, f"Time: {self.format_time(time_taken)}", WHITE)
-        
-        # Center the stats
-        self.screen.blit(errors_text, (self.width // 2 - errors_text.get_width() // 2, 240))
-        self.screen.blit(time_text, (self.width // 2 - time_text.get_width() // 2, 280))
-        
-        # Play again button
-        play_again_rect = pygame.Rect(self.width // 2 - 100, 350, 200, 50)
-        pygame.draw.rect(self.screen, BLUE, play_again_rect, 0, 10)
-        pygame.draw.rect(self.screen, WHITE, play_again_rect, 2, 10)
-        
-        play_again_text = FONT_MEDIUM.render("Play Again", True, WHITE)
-        self.screen.blit(play_again_text, (play_again_rect.centerx - play_again_text.get_width() // 2, 
-                                         play_again_rect.centery - play_again_text.get_height() // 2))
-        
-        # Main menu button
-        menu_rect = pygame.Rect(self.width // 2 - 100, 420, 200, 50)
-        pygame.draw.rect(self.screen, GREEN, menu_rect, 0, 10)
-        pygame.draw.rect(self.screen, WHITE, menu_rect, 2, 10)
-        
-        menu_text = FONT_MEDIUM.render("Main Menu", True, WHITE)
-        self.screen.blit(menu_text, (menu_rect.centerx - menu_text.get_width() // 2, 
-                                    menu_rect.centery - menu_text.get_height() // 2))
-        
-        pygame.display.flip()
+        # Force sync if in remote mode to ensure data is sent to the server
+        if self.db_mode == "remote":
+            try:
+                from database_sync import get_sync_database
+                sync_db = get_sync_database(server_url=self.server_url)
+                sync_db.force_sync_all()
+                
+                # Show sync notification
+                sync_msg = FONT_SMALL.render("Syncing to server...", True, WHITE)
+                sync_rect = pygame.Rect(self.width // 2 - sync_msg.get_width() // 2 - 10, 
+                                      500, 
+                                      sync_msg.get_width() + 20, 
+                                      sync_msg.get_height() + 10)
+                pygame.draw.rect(self.screen, BLUE, sync_rect, 0, 5)
+                self.screen.blit(sync_msg, (sync_rect.centerx - sync_msg.get_width() // 2,
+                                         sync_rect.centery - sync_msg.get_height() // 2))
+                pygame.display.update(sync_rect)  # Update only the sync message area
+                pygame.time.wait(500)  # Brief pause to show sync message
+                
+                # Completely redraw the game over screen after syncing
+                play_again_rect, menu_rect = draw_game_over_screen()
+            except Exception as e:
+                print(f"Error during sync after game: {e}")
         
         # Wait for player input
         waiting = True
@@ -952,24 +989,9 @@ class GameGUI:
         # Reset the screen
         self.screen.fill(WHITE)
         
-        # Get database instance based on mode
-        if self.db_mode == "local":
-            from database import get_database
-            db = get_database()
-        else:  # Remote mode
-            from database_sync import get_sync_database
-            db = get_sync_database(server_url=self.server_url)
-        
-        self.screen.fill(WHITE)
-        
         # Title
         title = FONT_LARGE.render("Game Statistics", True, BLUE)
         self.screen.blit(title, (self.width // 2 - title.get_width() // 2, 30))
-        
-        # Get leaderboard data
-        easy_leaders = db.get_leaderboard(difficulty="Easy", limit=5)
-        medium_leaders = db.get_leaderboard(difficulty="Medium", limit=5)
-        hard_leaders = db.get_leaderboard(difficulty="Hard", limit=5)
         
         # Draw tab buttons
         tab_width, tab_height = 120, 40
@@ -981,9 +1003,9 @@ class GameGUI:
         
         # Tabs data
         tabs = [
-            {"name": "Easy", "rect": easy_tab_rect, "data": easy_leaders},
-            {"name": "Medium", "rect": medium_tab_rect, "data": medium_leaders},
-            {"name": "Hard", "rect": hard_tab_rect, "data": hard_leaders}
+            {"name": "Easy", "rect": easy_tab_rect, "data": []},
+            {"name": "Medium", "rect": medium_tab_rect, "data": []},
+            {"name": "Hard", "rect": hard_tab_rect, "data": []}
         ]
         
         selected_tab = 0  # Default to Easy tab
@@ -991,9 +1013,54 @@ class GameGUI:
         # Back button
         back_rect = pygame.Rect(self.width // 2 - 100, 520, 200, 50)
         
+        # Refresh button
+        refresh_rect = pygame.Rect(self.width - 150, 520, 130, 40)
+        
+        # Counter for refresh intervals - increase to 15 seconds to reduce server load
+        last_refresh_time = 0
+        refresh_interval = 15000  # milliseconds (15 seconds instead of 3)
+        
         # Main loop for stats screen
         running = True
         while running:
+            current_time = pygame.time.get_ticks()
+            
+            # Check if it's time to refresh data
+            should_refresh = (current_time - last_refresh_time > refresh_interval)
+            
+            # Get fresh database instance each iteration to ensure updated data
+            if should_refresh:
+                # Show refresh indicator
+                refresh_msg = FONT_SMALL.render("Refreshing data...", True, BLUE)
+                refresh_rect_msg = pygame.Rect(10, self.height - 30, refresh_msg.get_width() + 10, refresh_msg.get_height() + 5)
+                pygame.draw.rect(self.screen, WHITE, refresh_rect_msg)
+                self.screen.blit(refresh_msg, (15, self.height - 25))
+                pygame.display.update(refresh_rect_msg)
+                
+                # Explicitly destroy previous database connection
+                global current_db
+                current_db = None
+                
+                if self.db_mode == "local":
+                    from database import get_database
+                    db = get_database()
+                else:  # Remote mode
+                    from database_sync import get_sync_database
+                    # Create a completely new instance to bypass any caching
+                    import importlib
+                    importlib.reload(sys.modules.get('database_sync', None))
+                    from database_sync import get_sync_database
+                    db = get_sync_database(server_url=self.server_url)
+                
+                # Refresh leaderboard data for each tab
+                print("!!! REFRESHING LEADERBOARD DATA !!!")
+                tabs[0]["data"] = db.get_leaderboard(difficulty="Easy", limit=5)
+                tabs[1]["data"] = db.get_leaderboard(difficulty="Medium", limit=5)
+                tabs[2]["data"] = db.get_leaderboard(difficulty="Hard", limit=5)
+                
+                # Update refresh time
+                last_refresh_time = current_time
+            
             mouse_pos = pygame.mouse.get_pos()
             mouse_clicked = False
             
@@ -1004,6 +1071,9 @@ class GameGUI:
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
                         running = False
+                    elif event.key == pygame.K_F5:
+                        # Force refresh on F5
+                        last_refresh_time = 0
                 elif event.type == pygame.MOUSEBUTTONDOWN:
                     if event.button == 1:  # Left mouse button
                         mouse_clicked = True
@@ -1138,6 +1208,20 @@ class GameGUI:
             
             if mouse_clicked and back_rect.collidepoint(mouse_pos):
                 running = False
+            
+            # Draw refresh button
+            refresh_btn_color = BLUE if refresh_rect.collidepoint(mouse_pos) else (100, 100, 200)
+            pygame.draw.rect(self.screen, refresh_btn_color, refresh_rect, 0, 10)
+            pygame.draw.rect(self.screen, BLACK, refresh_rect, 2, 10)
+            
+            refresh_btn_text = FONT_SMALL.render("Refresh Data", True, WHITE)
+            self.screen.blit(refresh_btn_text, (refresh_rect.centerx - refresh_btn_text.get_width() // 2,
+                                             refresh_rect.centery - refresh_btn_text.get_height() // 2))
+            
+            # Handle refresh button click
+            if mouse_clicked and refresh_rect.collidepoint(mouse_pos):
+                # Force a refresh by setting the timer to zero
+                last_refresh_time = 0
             
             pygame.display.flip()
             self.clock.tick(FPS)

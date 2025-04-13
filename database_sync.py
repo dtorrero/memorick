@@ -270,11 +270,36 @@ class SyncGameDatabase(OriginalGameDatabase):
             return []  # Return empty list instead of local data
         
         try:
-            # Try to get remote leaderboard
+            # Force connection check to ensure we have the latest data
+            self.check_server_connection()
+            
+            # Try to get remote leaderboard with cache busting parameter
             difficulty_param = difficulty if difficulty else "all"
             url = f"{self.server_url}/api/stats/leaderboard/{difficulty_param}"
-            print(f"Fetching leaderboard from: {url}")
-            response = requests.get(url, params={"limit": limit}, timeout=5)
+            
+            # Add cache busting parameter to prevent browser/request caching
+            cache_buster = int(time.time() * 1000)  # Use milliseconds for more uniqueness
+            
+            print(f"!!! Fetching fresh leaderboard from: {url}?t={cache_buster}")
+            
+            # Disable all caching mechanisms
+            headers = {
+                'Cache-Control': 'no-cache, no-store, must-revalidate',
+                'Pragma': 'no-cache',
+                'Expires': '0'
+            }
+            
+            response = requests.get(
+                url, 
+                params={
+                    "limit": limit,
+                    "t": cache_buster  # Cache busting parameter
+                }, 
+                headers=headers,
+                timeout=5
+            )
+            
+            print(f"!!! Leaderboard response status: {response.status_code}")
             
             if response.status_code == 200:
                 data = response.json()
@@ -305,9 +330,30 @@ class SyncGameDatabase(OriginalGameDatabase):
             return {"player": player_name, "stats": []}  # Empty stats instead of local data
         
         try:
+            # Force connection check to ensure we have the latest data
+            self.check_server_connection()
+            
+            # Add cache busting parameter to prevent browser/request caching
+            cache_buster = int(time.time() * 1000)  # Use milliseconds for more uniqueness
+            
             url = f"{self.server_url}/api/stats/player/{player_name}"
-            print(f"Fetching player stats from: {url}")
-            response = requests.get(url, timeout=5)
+            print(f"!!! Fetching fresh player stats from: {url}?t={cache_buster}")
+            
+            # Disable all caching mechanisms
+            headers = {
+                'Cache-Control': 'no-cache, no-store, must-revalidate',
+                'Pragma': 'no-cache',
+                'Expires': '0'
+            }
+            
+            response = requests.get(
+                url, 
+                params={"t": cache_buster},  # Cache busting parameter
+                headers=headers,
+                timeout=5
+            )
+            
+            print(f"!!! Player stats response status: {response.status_code}")
             
             if response.status_code == 200:
                 return response.json()
