@@ -11,6 +11,7 @@ import threading
 import requests
 from typing import Dict, List, Optional, Tuple, Any
 import sys
+import random
 
 # Add parent directory to path to allow importing shared modules
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -128,48 +129,81 @@ class SyncGameDatabase(OriginalGameDatabase):
                        completed: bool = True) -> int:
         """
         Save game statistics locally and directly to the server (no queuing).
+        Implements retry logic for server saves to handle concurrency issues.
         """
         # First save to local DB using the original method
         local_id = super().save_game_stats(
             player_name, difficulty, start_time, end_time, 
             moves, matches, completed)
         
-        # If we're online, immediately try to save to the server
+        # If we're online, try to save to the server with retry logic
         if self.online or self.check_server_connection():
-            try:
-                # Prepare the data for the server
-                stats_data = {
-                    "client_id": CLIENT_ID,
-                    "player_name": player_name,
-                    "difficulty": difficulty,
-                    "start_time": start_time,
-                    "end_time": end_time,
-                    "duration_seconds": end_time - start_time,
-                    "moves": moves,
-                    "matches": matches,
-                    "errors": max(0, moves - matches),
-                    "completed": completed
-                }
+            # Prepare the data for the server (outside the retry loop to avoid recomputing)
+            stats_data = {
+                "client_id": CLIENT_ID,
+                "player_name": player_name,
+                "difficulty": difficulty,
+                "start_time": start_time,
+                "end_time": end_time,
+                "duration_seconds": end_time - start_time,
+                "moves": moves,
+                "matches": matches,
+                "errors": max(0, moves - matches),
+                "completed": completed,
+                "local_id": local_id  # Include local_id to help prevent duplicates
+            }
+            
+            # Retry parameters
+            max_retries = 5
+            base_delay = 1  # Initial delay in seconds
+            
+            for attempt in range(1, max_retries + 1):
+                try:
+                    # Construct server URL
+                    base_url = self.server_url.rstrip('/')
+                    url = f"{base_url}/api/stats/save"
+                    
+                    if attempt > 1:
+                        print(f"Retry attempt {attempt}/{max_retries} for saving game stats")
+                    else:
+                        print(f"Directly saving game stats to server: {url}")
+                    
+                    # Send data to server
+                    response = requests.post(
+                        url,
+                        json=stats_data,
+                        timeout=10 + (attempt * 5)  # Increasing timeout with each retry
+                    )
+                    
+                    # Handle server response
+                    if response.status_code == 200:
+                        print(f"Successfully saved game stats to server for player {player_name}")
+                        return local_id
+                    
+                    # Special handling for specific error codes
+                    elif response.status_code == 409:  # Conflict - stat may already exist
+                        print(f"Game stat already exists on server (conflict response)")
+                        return local_id
+                    else:
+                        print(f"Attempt {attempt}: Failed to save game stats to server: {response.status_code}")
+                        # Only retry on 5xx server errors or specific 4xx errors that might be temporary
+                        if response.status_code < 500 and response.status_code != 429:  # Not a server error or rate limit
+                            print(f"Non-retriable error code {response.status_code}, abandoning retry")
+                            break
                 
-                # Send directly to server
-                base_url = self.server_url.rstrip('/')
-                url = f"{base_url}/api/stats/save"
-                print(f"Directly saving game stats to server: {url}")
+                except requests.exceptions.RequestException as e:
+                    print(f"Attempt {attempt}: Network error saving game stats: {e}")
                 
-                response = requests.post(
-                    url,
-                    json=stats_data,
-                    timeout=10
-                )
-                
-                if response.status_code == 200:
-                    print(f"Successfully saved game stats to server for player {player_name}")
-                else:
-                    print(f"Failed to save game stats to server: {response.status_code}")
-            except Exception as e:
-                print(f"Error saving game stats to server: {e}")
+                # Don't sleep after the last attempt
+                if attempt < max_retries:
+                    # Exponential backoff with jitter to avoid thundering herd
+                    delay = base_delay * (2 ** (attempt - 1)) * (0.5 + random.random())
+                    print(f"Waiting {delay:.2f}s before retry...")
+                    time.sleep(delay)
+            
+            print(f"Failed to save game stats to server after {max_retries} attempts")
         
-        # Return the local ID (we don't track sync status anymore)
+        # Return the local ID regardless of server save success
         return local_id
     
     def sync_game_stat(self, game_stats_id: int) -> bool:

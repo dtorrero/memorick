@@ -1049,7 +1049,7 @@ class GameGUI:
         refresh_rect = pygame.Rect(self.width - 150, 520, 130, 40)
         
         # Reset cache button (only shown if needed)
-        reset_cache_rect = pygame.Rect(10, 520, 150, 40)
+        reset_cache_rect = pygame.Rect(10, 520, 180, 40)  # Increase width from 150 to 180
         show_reset_button = False
         cache_reset_message = ""
         cache_message_timer = 0
@@ -1305,6 +1305,7 @@ class GameGUI:
                 pygame.draw.rect(self.screen, reset_btn_color, reset_cache_rect, 0, 10)
                 pygame.draw.rect(self.screen, BLACK, reset_cache_rect, 2, 10)
                 
+                # Use smaller font for button text to ensure it fits
                 reset_btn_text = FONT_SMALL.render("Reset Local Cache", True, WHITE)
                 self.screen.blit(reset_btn_text, (reset_cache_rect.centerx - reset_btn_text.get_width() // 2,
                                                reset_cache_rect.centery - reset_btn_text.get_height() // 2))

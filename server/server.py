@@ -36,9 +36,16 @@ def init_db():
             matches INTEGER NOT NULL,
             errors INTEGER NOT NULL,
             completed BOOLEAN NOT NULL,
-            sync_time REAL NOT NULL
+            sync_time REAL NOT NULL,
+            client_id TEXT,
+            local_id INTEGER DEFAULT -1
         )
     ''')
+    
+    # Add indices for faster lookups and duplicate detection
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_player_name ON game_stats(player_name)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_client_local ON game_stats(client_id, local_id)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_dedup ON game_stats(player_name, start_time, end_time)')
     
     conn.commit()
     conn.close()
@@ -112,18 +119,57 @@ def save_stats():
         client_id = data.get('client_id', 'unknown')
         print(f"Saving game stats from client: {client_id}")
         
-        # Save to database
+        # Check for potential duplicate based on client_id, player_name, start_time and end_time
+        # This helps prevent duplicate entries from retry logic
         conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
+        
+        # If local_id is provided in the data, use it for deduplication
+        if 'local_id' in data:
+            cursor.execute('''
+                SELECT id FROM game_stats
+                WHERE player_name = ? AND start_time = ? AND end_time = ? 
+                AND client_id = ? AND local_id = ?
+            ''', (
+                data['player_name'], data['start_time'], data['end_time'],
+                client_id, data['local_id']
+            ))
+        else:
+            # Fallback to time-based duplicate detection
+            cursor.execute('''
+                SELECT id FROM game_stats
+                WHERE player_name = ? AND start_time = ? AND end_time = ? 
+                AND ABS(sync_time - ?) < 60
+            ''', (
+                data['player_name'], data['start_time'], data['end_time'], sync_time
+            ))
+        
+        existing_record = cursor.fetchone()
+        if existing_record:
+            # This appears to be a duplicate submission
+            record_id = existing_record['id']
+            conn.close()
+            print(f"Duplicate game stat detected, returning existing ID: {record_id}")
+            return jsonify({
+                "success": True, 
+                "message": "Existing record found, no duplicate created",
+                "id": record_id,
+                "duplicate": True
+            }), 409  # 409 Conflict
+        
+        # If we reach here, this is not a duplicate, so save to database
         cursor.execute('''
             INSERT INTO game_stats (
                 player_name, difficulty, start_time, end_time, 
-                duration_seconds, moves, matches, errors, completed, sync_time
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                duration_seconds, moves, matches, errors, completed, sync_time,
+                client_id, local_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             data['player_name'], data['difficulty'], data['start_time'], 
             data['end_time'], data['duration_seconds'], data['moves'], 
-            data['matches'], data['errors'], data['completed'], sync_time
+            data['matches'], data['errors'], data['completed'], sync_time,
+            client_id, data.get('local_id', -1)  # Store local_id if provided
         ))
         
         conn.commit()
