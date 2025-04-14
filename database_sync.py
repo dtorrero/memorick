@@ -69,6 +69,9 @@ class SyncGameDatabase(OriginalGameDatabase):
         # Make sure the source column exists for tracking data origins
         self._ensure_source_column_exists()
         
+        # Clean the database to remove duplicates
+        self.clean_database()
+        
         # We don't need a sync tracking table anymore, but we'll keep the local table
         # structure for backwards compatibility
         self.initialize_sync_table()
@@ -99,8 +102,19 @@ class SyncGameDatabase(OriginalGameDatabase):
                 ''')
                 self.conn.commit()
                 print("Added 'source' column successfully")
+                
+            # Also ensure server_id column exists to track IDs from the server
+            if 'server_id' not in column_names:
+                print("Adding 'server_id' column to game_stats table...")
+                self.cursor.execute('''
+                    ALTER TABLE game_stats
+                    ADD COLUMN server_id INTEGER
+                ''')
+                self.conn.commit()
+                print("Added 'server_id' column successfully")
+                
         except sqlite3.Error as e:
-            print(f"Error ensuring source column exists: {e}")
+            print(f"Error ensuring columns exist: {e}")
     
     def check_server_connection(self):
         """Check if the server is available."""
@@ -667,17 +681,29 @@ class SyncGameDatabase(OriginalGameDatabase):
             try:
                 # Clear existing server-sourced records for this difficulty
                 if difficulty:
+                    print(f"Clearing server-sourced records for difficulty: {difficulty}")
                     self.cursor.execute(
                         "DELETE FROM game_stats WHERE source = 'server' AND difficulty = ?", 
                         (difficulty,)
                     )
                 else:
                     # If no difficulty specified, clear all server records
+                    print("Clearing all server-sourced records")
                     self.cursor.execute("DELETE FROM game_stats WHERE source = 'server'")
                 
                 # Then insert new records from server
                 inserted_count = 0
+                server_id_map = {}
+                
+                # First collect all IDs to avoid duplicates
                 for item in server_data:
+                    if 'id' in item:
+                        server_id_map[item['id']] = item
+                
+                print(f"Processing {len(server_id_map)} unique server records")
+                
+                # Then insert records, using server IDs to avoid duplicates
+                for server_id, item in server_id_map.items():
                     # Skip if missing required fields
                     if not all(k in item for k in ['player_name', 'difficulty', 'duration_seconds']):
                         continue
@@ -698,17 +724,17 @@ class SyncGameDatabase(OriginalGameDatabase):
                     
                     # Calculate moves and matches based on errors
                     # This is an approximation since we don't know actual values
-                    matches = 10  # Assume standard board size
+                    matches = item.get('matches', 8)  # Use actual matches if available
                     moves = matches + errors
                     
-                    # Insert as server-sourced record
+                    # Insert as server-sourced record, including the server ID
                     self.cursor.execute('''
                         INSERT INTO game_stats 
                         (player_name, difficulty, start_time, end_time, 
-                         duration_seconds, moves, matches, errors, completed, source)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 'server')
+                         duration_seconds, moves, matches, errors, completed, source, server_id)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 'server', ?)
                     ''', (player_name, record_difficulty, start_time, end_time, 
-                         duration, moves, matches, errors))
+                         duration, moves, matches, errors, server_id))
                     
                     inserted_count += 1
                 
@@ -732,6 +758,97 @@ class SyncGameDatabase(OriginalGameDatabase):
         finally:
             # Reset isolation level
             self.conn.isolation_level = None
+    
+    def _deduplicate_stats(self, stats_list):
+        """
+        Helper method to deduplicate stats by their unique game signatures.
+        
+        Args:
+            stats_list: List of stats dictionaries to deduplicate
+            
+        Returns:
+            List of deduplicated stats
+        """
+        # Only debug log if there are lots of stats (likely only during startup)
+        if len(stats_list) > 5:
+            print(f"Deduplicating {len(stats_list)} stats")
+        
+        # Deduplicate based on unique game signature using server ID if available
+        unique_stats = {}
+        for stat in stats_list:
+            # If we have a server ID, use that as the primary key
+            if "id" in stat:
+                key = f"id_{stat['id']}"
+            # Otherwise create a unique key from game properties
+            else:
+                # Use all available properties to create a truly unique key
+                key_elements = [
+                    f"p_{stat['player_name']}",
+                    f"d_{stat['difficulty']}",
+                    f"t_{float(stat['duration_seconds']):.2f}",
+                    f"e_{stat.get('errors', 0)}"
+                ]
+                key = "_".join(key_elements)
+            
+            # If this key is already in use, decide which record to keep
+            if key in unique_stats:
+                # Prefer server data over local data
+                if stat.get('source') == 'server' and unique_stats[key].get('source') == 'local':
+                    unique_stats[key] = stat
+            else:
+                unique_stats[key] = stat
+        
+        # Create the final deduplicated list
+        deduplicated_stats = list(unique_stats.values())
+        
+        orig_count = len(stats_list)
+        dedup_count = len(deduplicated_stats)
+        
+        # Print details about what was removed only if significant deduplication happened
+        if orig_count > dedup_count and orig_count > 5:
+            print(f"Deduplicated stats: {orig_count} → {dedup_count} ({orig_count - dedup_count} removed)")
+            
+        # Return the deduplicated list
+        return deduplicated_stats
+        
+    def get_player_stats(self, player_name: str) -> list:
+        """
+        Override the parent method to get player stats, ensuring no duplicates between 
+        local and server records.
+        
+        Args:
+            player_name: Name of the player
+            
+        Returns:
+            List of dictionaries containing player's game stats with duplicates removed
+        """
+        try:
+            if not self.conn:
+                self.initialize_db()
+            
+            # Get all stats for this player, both local and server sourced
+            self.cursor.execute('''
+                SELECT id, player_name, difficulty, start_time, end_time, 
+                       duration_seconds, moves, matches, errors, completed, source
+                FROM game_stats 
+                WHERE player_name = ?
+                ORDER BY start_time DESC
+            ''', (player_name,))
+            
+            all_stats = self.cursor.fetchall()
+            
+            # Convert to list of dictionaries
+            columns = [col[0] for col in self.cursor.description]
+            stats_dicts = [dict(zip(columns, row)) for row in all_stats]
+            
+            # Deduplicate the stats
+            deduplicated_stats = self._deduplicate_stats(stats_dicts)
+            
+            return deduplicated_stats
+            
+        except sqlite3.Error as e:
+            print(f"Error retrieving player stats: {e}")
+            return []
     
     def get_player_remote_stats(self, player_name):
         """
@@ -807,11 +924,15 @@ class SyncGameDatabase(OriginalGameDatabase):
                 server_stats = server_data.get("stats", [])
                 for stat in server_stats:
                     stat["server"] = True
+                    stat["source"] = "server"  # Add source tag for deduplication
+                
+                # Deduplicate server stats
+                deduplicated_server_stats = self._deduplicate_stats(server_stats)
                 
                 # Create combined data structure with consistent format
                 return {
                     "player": player_name,
-                    "stats": server_stats,  # Use server data as primary 
+                    "stats": deduplicated_server_stats,  # Use server data as primary 
                     "local_stats": local_stats,  # Include local stats separately
                     "has_local_data": len(local_stats) > 0,
                     "using_cached": False,
@@ -869,9 +990,12 @@ class SyncGameDatabase(OriginalGameDatabase):
             }
             stats.append(stat_dict)
         
+        # Deduplicate local stats
+        deduplicated_stats = self._deduplicate_stats(stats)
+        
         return {
             "player": player_name,
-            "stats": stats,
+            "stats": deduplicated_stats,
             "local_stats": [],  # Empty since all stats are already in the main list
             "has_local_data": True,  # All data is local
             "using_cached": True,
@@ -967,6 +1091,86 @@ class SyncGameDatabase(OriginalGameDatabase):
             WHERE type='table' AND name='{table_name}'
         """)
         return self.cursor.fetchone() is not None
+
+    def clean_database(self):
+        """
+        Clean the database by removing all duplicates and ensuring proper schema.
+        This is a utility function that can be called to fix duplicate records.
+        """
+        print("Cleaning database and removing duplicates...")
+        try:
+            # First ensure we have the proper columns
+            self._ensure_source_column_exists()
+            
+            # Begin transaction
+            self.conn.isolation_level = 'EXCLUSIVE'
+            self.conn.execute('BEGIN TRANSACTION')
+            
+            try:
+                # Get all stats
+                self.cursor.execute('''
+                    SELECT id, player_name, difficulty, duration_seconds, errors, 
+                           completed, source, server_id
+                    FROM game_stats
+                ''')
+                
+                all_records = self.cursor.fetchall()
+                print(f"Found {len(all_records)} total records")
+                
+                # Create a mapping of unique game signatures to record IDs
+                # Prefer server records over local ones
+                unique_records = {}
+                local_ids_to_delete = []
+                
+                for record in all_records:
+                    record_id = record[0]
+                    player_name = record[1]
+                    difficulty = record[2]
+                    duration = record[3]
+                    errors = record[4]
+                    completed = record[5]
+                    source = record[6]
+                    server_id = record[7]
+                    
+                    # Create a unique key for this record
+                    key = f"{player_name}_{difficulty}_{duration:.2f}_{errors}_{completed}"
+                    
+                    if server_id is not None:
+                        # If we have a server ID, use that as a definitive key
+                        server_key = f"server_{server_id}"
+                        if server_key in unique_records:
+                            # This is a true duplicate of a server record
+                            local_ids_to_delete.append(record_id)
+                        else:
+                            unique_records[server_key] = record_id
+                    elif key in unique_records:
+                        # This is a duplicate based on game properties
+                        local_ids_to_delete.append(record_id)
+                    else:
+                        unique_records[key] = record_id
+                
+                # Delete duplicate records
+                if local_ids_to_delete:
+                    placeholders = ','.join(['?'] * len(local_ids_to_delete))
+                    self.cursor.execute(f'''
+                        DELETE FROM game_stats
+                        WHERE id IN ({placeholders})
+                    ''', local_ids_to_delete)
+                    
+                    print(f"Deleted {len(local_ids_to_delete)} duplicate records")
+                else:
+                    print("No duplicates found")
+                
+                # Commit all changes
+                self.conn.commit()
+                print("Database cleaning completed successfully")
+                
+            except Exception as e:
+                self.conn.rollback()
+                print(f"Error during database cleaning: {e}")
+        finally:
+            # Reset isolation level
+            self.conn.isolation_level = None
 
 
 # Singleton instance for use throughout the application

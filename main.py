@@ -1034,7 +1034,29 @@ class GameGUI:
         # Show loading indicator
         self.screen.fill(WHITE)
         loading_text = FONT_MEDIUM.render("Loading statistics...", True, BLUE)
-        self.screen.blit(loading_text, (self.width // 2 - loading_text.get_width() // 2, self.height // 2 - loading_text.get_height() // 2))
+        loading_rect = pygame.Rect(
+            self.width // 2 - 150,
+            self.height // 2 - 40,
+            300, 80
+        )
+        
+        # Draw a nice loading box
+        pygame.draw.rect(self.screen, (240, 240, 255), loading_rect, 0, 10)  # Light blue background
+        pygame.draw.rect(self.screen, BLUE, loading_rect, 2, 10)  # Blue border
+        
+        # Add loading text
+        self.screen.blit(loading_text, (self.width // 2 - loading_text.get_width() // 2, 
+                                     self.height // 2 - loading_text.get_height() // 2))
+        
+        # Add a small waiting animation
+        dot_positions = [(loading_rect.centerx - 20, loading_rect.bottom - 20),
+                        (loading_rect.centerx, loading_rect.bottom - 20),
+                        (loading_rect.centerx + 20, loading_rect.bottom - 20)]
+        
+        for i, pos in enumerate(dot_positions):
+            color = (100, 100, 255) if (pygame.time.get_ticks() // 500) % 3 == i else BLUE
+            pygame.draw.circle(self.screen, color, pos, 5)
+            
         pygame.display.flip()
         
         # Define LIGHT_BLUE color for tab rendering
@@ -1212,7 +1234,7 @@ class GameGUI:
                 current_difficulty = tabs[selected_tab]["name"]
                 player_stats = db.get_player_stats(self.player_name)
                 
-                # Filter stats for the selected difficulty
+                # Filter stats for the selected difficulty 
                 difficulty_stats = [stat for stat in player_stats if stat["difficulty"] == current_difficulty]
                 
                 if difficulty_stats:

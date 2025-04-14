@@ -42,7 +42,29 @@ class RemoteStatsGameGUI(GameGUI):
         # Show loading indicator while fetching data
         self.screen.fill(WHITE)
         loading_text = FONT_MEDIUM.render("Loading statistics...", True, BLUE)
-        self.screen.blit(loading_text, (self.width // 2 - loading_text.get_width() // 2, self.height // 2 - loading_text.get_height() // 2))
+        loading_rect = pygame.Rect(
+            self.width // 2 - 150,
+            self.height // 2 - 40,
+            300, 80
+        )
+        
+        # Draw a nice loading box
+        pygame.draw.rect(self.screen, (240, 240, 255), loading_rect, 0, 10)  # Light blue background
+        pygame.draw.rect(self.screen, BLUE, loading_rect, 2, 10)  # Blue border
+        
+        # Add loading text
+        self.screen.blit(loading_text, (self.width // 2 - loading_text.get_width() // 2, 
+                                     self.height // 2 - loading_text.get_height() // 2))
+        
+        # Add a small waiting animation
+        dot_positions = [(loading_rect.centerx - 20, loading_rect.bottom - 20),
+                        (loading_rect.centerx, loading_rect.bottom - 20),
+                        (loading_rect.centerx + 20, loading_rect.bottom - 20)]
+        
+        for i, pos in enumerate(dot_positions):
+            color = (100, 100, 255) if (pygame.time.get_ticks() // 500) % 3 == i else BLUE
+            pygame.draw.circle(self.screen, color, pos, 5)
+            
         pygame.display.flip()
         
         # Get the syncing database and force a refresh of data when the screen is opened
@@ -199,8 +221,16 @@ class RemoteStatsGameGUI(GameGUI):
                     if entry.get("cached", False):
                         row_color = (180, 0, 0)  # Red for cached entries
                     
+                    # Highlight current player in green
+                    if entry["player_name"] == self.player_name:
+                        row_color = GREEN
+                    
                     for j, data in enumerate(row_data):
-                        data_text = FONT_SMALL.render(data, True, row_color)
+                        # Use smaller font for player name if it's too long
+                        if j == 1 and len(data) > 15:
+                            data_text = pygame.font.SysFont('Arial', 16).render(data, True, row_color)
+                        else:
+                            data_text = FONT_SMALL.render(data, True, row_color)
                         self.screen.blit(data_text, (row_x, row_y))
                         row_x += header_widths[j]
                 
@@ -222,16 +252,29 @@ class RemoteStatsGameGUI(GameGUI):
                     using_cached = player_data.get("using_cached", False)
                     has_local_data = player_data.get("has_local_data", False)
                     error_message = player_data.get("error", None)
+                    
+                    # Print debug info to help diagnose
+                    if len(player_stats) > 10:
+                        print(f"Remote stats for {self.player_name}, count: {len(player_stats)}")
+                        print(f"Local-only stats count: {len(local_only_stats)}")
                 else:
                     player_stats = db.get_player_stats(self.player_name)
                     local_only_stats = []
                     using_cached = False
                     has_local_data = True
                     error_message = None
+                    
+                    # Print debug info
+                    if len(player_stats) > 10:
+                        print(f"Local stats for {self.player_name}, count: {len(player_stats)}")
                 
                 # Filter stats for the selected difficulty
                 current_difficulty = tabs[selected_tab]["name"]
                 difficulty_stats = [stat for stat in player_stats if stat["difficulty"] == current_difficulty]
+                
+                # Sort by completion time
+                if difficulty_stats:
+                    difficulty_stats.sort(key=lambda x: x.get("duration_seconds", float('inf')))
                 
                 # Create status text with connection information
                 source_text = source
@@ -254,14 +297,28 @@ class RemoteStatsGameGUI(GameGUI):
                 
                 if difficulty_stats:
                     # Calculate filtered stats for the selected difficulty
+                    # Ensure we only count completed games when appropriate
                     total_games = len(difficulty_stats)
-                    completed_games = sum(1 for stat in difficulty_stats if stat["completed"])
+                    completed_games = sum(1 for stat in difficulty_stats if stat.get("completed", True))
                     
                     # Only use completed games for time calculations
-                    completed_stats = [stat for stat in difficulty_stats if stat["completed"]]
-                    total_time = sum(stat["duration_seconds"] for stat in completed_stats)
+                    completed_stats = [stat for stat in difficulty_stats if stat.get("completed", True)]
+                    total_time = sum(float(stat["duration_seconds"]) for stat in completed_stats)
                     avg_time = total_time / len(completed_stats) if completed_stats else 0
-                    best_time = min((stat["duration_seconds"] for stat in completed_stats), default=0)
+                    
+                    # Make sure we handle missing or non-numeric values
+                    try:
+                        best_time = min((float(stat["duration_seconds"]) for stat in completed_stats))
+                    except (ValueError, TypeError):
+                        best_time = 0
+                    
+                    # Print detailed stats info for debugging only when significant data is present
+                    if len(completed_stats) > 5:
+                        print(f"Stats analysis for {self.player_name} ({current_difficulty}):")
+                        print(f"  Total games: {total_games}")
+                        print(f"  Completed games: {completed_games}")
+                        print(f"  Best time: {best_time}")
+                        print(f"  Avg time: {avg_time}")
                     
                     # Player stats section
                     stats_y = 380
