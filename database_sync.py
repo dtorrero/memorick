@@ -66,6 +66,9 @@ class SyncGameDatabase(OriginalGameDatabase):
         # Check server connection
         self.check_server_connection()
         
+        # Make sure the source column exists for tracking data origins
+        self._ensure_source_column_exists()
+        
         # We don't need a sync tracking table anymore, but we'll keep the local table
         # structure for backwards compatibility
         self.initialize_sync_table()
@@ -73,9 +76,31 @@ class SyncGameDatabase(OriginalGameDatabase):
         # Check for server reset if we're online
         if self.online:
             self.detect_server_reset()
+            
+            # Get fresh server data immediately on initialization
+            self._refresh_server_data()
         
         # Remove background sync thread since we no longer need automatic syncing
         # We only want to write to the server when a game ends
+    
+    def _ensure_source_column_exists(self):
+        """Make sure the game_stats table has a source column to track data origin."""
+        try:
+            # Check if source column exists
+            self.cursor.execute("PRAGMA table_info(game_stats)")
+            columns = self.cursor.fetchall()
+            column_names = [col[1] for col in columns]
+            
+            if 'source' not in column_names:
+                print("Adding 'source' column to game_stats table...")
+                self.cursor.execute('''
+                    ALTER TABLE game_stats
+                    ADD COLUMN source TEXT DEFAULT 'local'
+                ''')
+                self.conn.commit()
+                print("Added 'source' column successfully")
+        except sqlite3.Error as e:
+            print(f"Error ensuring source column exists: {e}")
     
     def check_server_connection(self):
         """Check if the server is available."""
@@ -129,13 +154,28 @@ class SyncGameDatabase(OriginalGameDatabase):
                        completed: bool = True) -> int:
         """
         Save game statistics locally and directly to the server (no queuing).
-        Implements retry logic for server saves to handle concurrency issues.
+        Always marks local records with source='local' for proper tracking.
         """
-        # First save to local DB using the original method
-        local_id = super().save_game_stats(
-            player_name, difficulty, start_time, end_time, 
-            moves, matches, completed)
-        
+        # First save to local DB with explicit source tag
+        try:
+            errors = max(0, moves - matches)
+            duration = end_time - start_time
+            
+            self.cursor.execute('''
+                INSERT INTO game_stats (
+                    player_name, difficulty, start_time, end_time, 
+                    duration_seconds, moves, matches, errors, completed, source
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'local')
+            ''', (player_name, difficulty, start_time, end_time, 
+                 duration, moves, matches, errors, completed))
+            
+            local_id = self.cursor.lastrowid
+            self.conn.commit()
+            
+        except sqlite3.Error as e:
+            print(f"Error saving game stats to local DB: {e}")
+            return -1
+
         # If we're online, try to save to the server with retry logic
         if self.online or self.check_server_connection():
             # Prepare the data for the server (outside the retry loop to avoid recomputing)
@@ -178,6 +218,8 @@ class SyncGameDatabase(OriginalGameDatabase):
                     # Handle server response
                     if response.status_code == 200:
                         print(f"Successfully saved game stats to server for player {player_name}")
+                        # No need to refresh data automatically, it will be refreshed when 
+                        # the stats page is opened
                         return local_id
                     
                     # Special handling for specific error codes
@@ -314,6 +356,61 @@ class SyncGameDatabase(OriginalGameDatabase):
                 print(f"Error in sync thread: {e}")
                 time.sleep(120)  # Wait longer after an error
     
+    def get_leaderboard(self, difficulty: Optional[str] = None, 
+                       limit: int = 10) -> List[Dict[str, Any]]:
+        """
+        Override the original get_leaderboard method to handle both local and remote data.
+        In remote mode, only return server-sourced data if available, falling back to 
+        local data only when necessary.
+        
+        Args:
+            difficulty: Game difficulty (Easy, Medium, Hard) or None for all
+            limit: Maximum number of records to return
+            
+        Returns:
+            List of dictionaries containing top game stats
+        """
+        # When online, directly call the remote method which already handles fallback
+        if self.online or self.check_server_connection():
+            return self.get_remote_leaderboard(difficulty, limit)
+        
+        # When completely offline and not in remote mode, use the traditional method
+        try:
+            if not self.conn:
+                self.initialize_db()
+            
+            # Use explicit SQL ordering to ensure correct results
+            query = '''
+                SELECT id, player_name, difficulty, start_time, end_time, 
+                       duration_seconds, errors, source
+                FROM game_stats 
+                WHERE completed = 1
+            '''
+            
+            params = []
+            if difficulty:
+                query += " AND difficulty = ?"
+                params.append(difficulty)
+            
+            # For local data, explicitly filter to only include local source
+            query += " AND source = 'local'"
+                
+            # Explicitly order first by time ascending, then by errors ascending
+            query += " ORDER BY duration_seconds ASC, errors ASC LIMIT ?"
+            params.append(limit)
+            
+            # Debug the actual query being executed
+            print(f"OFFLINE MODE: Executing local-only leaderboard query: {query} with params {params}")
+            
+            self.cursor.execute(query, params)
+            results = [dict(zip([col[0] for col in self.cursor.description], row)) 
+                      for row in self.cursor.fetchall()]
+            
+            return results
+        except sqlite3.Error as e:
+            print(f"Error retrieving leaderboard: {e}")
+            return []
+
     def get_remote_leaderboard(self, difficulty: Optional[str] = None, 
                               limit: int = 10) -> List[Dict[str, Any]]:
         """
@@ -324,29 +421,50 @@ class SyncGameDatabase(OriginalGameDatabase):
         # Reset cached data flag
         self.using_cached_data = False
         
-        # Check server connection without syncing local data
-        if not self.online:
-            self.check_server_connection()
+        # Always check server connection
+        self.check_server_connection()
         
         if not self.online:
             print("Cannot get remote leaderboard: Server is offline")
-            # If we have cached data, mark it and return it with a flag
-            self.cursor.execute(f'''
-                SELECT COUNT(*) FROM game_stats 
-                WHERE difficulty = ? OR ? IS NULL
-            ''', (difficulty, difficulty))
+            # Use cached data only as fallback with clear indicator
+            print("Using local-only leaderboard data (server offline)")
+            self.using_cached_data = True
             
-            count = self.cursor.fetchone()[0]
-            if count > 0:
-                print("Using cached leaderboard data (server offline)")
-                self.using_cached_data = True
-                # Get local data as fallback, with special flag
-                local_data = super().get_leaderboard(difficulty, limit)
-                # Add a flag to indicate this is cached data
+            # Get local data with source filter
+            try:
+                query = '''
+                    SELECT id, player_name, difficulty, start_time, end_time, 
+                           duration_seconds, errors, source
+                    FROM game_stats 
+                    WHERE completed = 1
+                '''
+                
+                params = []
+                if difficulty:
+                    query += " AND difficulty = ?"
+                    params.append(difficulty)
+                
+                # Only show local data in offline mode
+                query += " AND source = 'local'"
+                
+                query += " ORDER BY duration_seconds ASC, errors ASC LIMIT ?"
+                params.append(limit)
+                
+                print(f"OFFLINE FALLBACK: Executing local-only query: {query}")
+                
+                self.cursor.execute(query, params)
+                local_data = [dict(zip([col[0] for col in self.cursor.description], row)) 
+                             for row in self.cursor.fetchall()]
+                
+                # Add very clear cached indicator
                 for item in local_data:
                     item["cached"] = True
+                    item["warning"] = "LOCAL DATA ONLY - Not synced with server"
+                
                 return local_data
-            return []  # No cached data
+            except Exception as e:
+                print(f"Error getting local fallback data: {e}")
+                return []
         
         try:
             # Try to get remote leaderboard with cache busting parameter
@@ -359,7 +477,7 @@ class SyncGameDatabase(OriginalGameDatabase):
             # Add cache busting parameter to prevent browser/request caching
             cache_buster = int(time.time() * 1000)  # Use milliseconds for more uniqueness
             
-            print(f"!!! Fetching fresh leaderboard from: {url}?t={cache_buster}")
+            print(f"Fetching fresh leaderboard from: {url}?t={cache_buster}")
             
             # Disable all caching mechanisms
             headers = {
@@ -378,147 +496,387 @@ class SyncGameDatabase(OriginalGameDatabase):
                 timeout=5
             )
             
-            print(f"!!! Leaderboard response status: {response.status_code}")
+            print(f"Leaderboard response status: {response.status_code}")
             
             if response.status_code == 200:
                 data = response.json()
                 leaderboard = data.get("leaderboard", [])
                 
-                # If server returned empty data but we have local records,
-                # this might indicate a server reset
-                if not leaderboard:
-                    self.cursor.execute(f'''
-                        SELECT COUNT(*) FROM game_stats 
-                        WHERE difficulty = ? OR ? IS NULL
-                    ''', (difficulty, difficulty))
-                    
-                    local_count = self.cursor.fetchone()[0]
-                    if local_count > 0:
-                        print("Warning: Server returned empty data but local cache exists")
-                        print("This may indicate a server reset")
-                        # We'll return the empty server data, but could offer reset option
+                # No longer update local cache from server data automatically
+                # This prevents data duplication
+                # self._update_local_cache_from_server(leaderboard)
                 
+                # Use the actual server data directly
                 return leaderboard
             else:
                 print(f"Error getting remote leaderboard: {response.status_code}")
-                # If server error, use cached data as fallback
-                print("Using cached leaderboard data (server error)")
+                # Fallback to cached data with warning, using only local source
+                print("Using local-only leaderboard data (server error)")
                 self.using_cached_data = True
-                local_data = super().get_leaderboard(difficulty, limit)
-                # Add a flag to indicate this is cached data
-                for item in local_data:
-                    item["cached"] = True
-                return local_data
+                
+                try:
+                    query = '''
+                        SELECT id, player_name, difficulty, start_time, end_time, 
+                               duration_seconds, errors, source
+                        FROM game_stats 
+                        WHERE completed = 1
+                    '''
+                    
+                    params = []
+                    if difficulty:
+                        query += " AND difficulty = ?"
+                        params.append(difficulty)
+                    
+                    # Only show local data when server unavailable
+                    query += " AND source = 'local'"
+                    
+                    query += " ORDER BY duration_seconds ASC, errors ASC LIMIT ?"
+                    params.append(limit)
+                    
+                    self.cursor.execute(query, params)
+                    local_data = [dict(zip([col[0] for col in self.cursor.description], row)) 
+                                 for row in self.cursor.fetchall()]
+                    
+                    # Add very clear cached indicator
+                    for item in local_data:
+                        item["cached"] = True
+                        item["warning"] = f"LOCAL DATA ONLY - Server error {response.status_code}"
+                    
+                    return local_data
+                except Exception as inner_e:
+                    print(f"Error getting local fallback data: {inner_e}")
+                    return []
                 
         except Exception as e:
             print(f"Failed to get remote leaderboard: {e}")
-            # If exception, use cached data as fallback
-            print("Using cached leaderboard data (exception)")
+            # Fallback to cached data with warning
+            print("Using local-only leaderboard data (exception)")
             self.using_cached_data = True
-            local_data = super().get_leaderboard(difficulty, limit)
-            # Add a flag to indicate this is cached data
-            for item in local_data:
-                item["cached"] = True
-            return local_data
+            
+            try:
+                query = '''
+                    SELECT id, player_name, difficulty, start_time, end_time, 
+                           duration_seconds, errors, source
+                    FROM game_stats 
+                    WHERE completed = 1
+                '''
+                
+                params = []
+                if difficulty:
+                    query += " AND difficulty = ?"
+                    params.append(difficulty)
+                
+                # Only show local data when server unavailable
+                query += " AND source = 'local'"
+                
+                query += " ORDER BY duration_seconds ASC, errors ASC LIMIT ?"
+                params.append(limit)
+                
+                self.cursor.execute(query, params)
+                local_data = [dict(zip([col[0] for col in self.cursor.description], row)) 
+                             for row in self.cursor.fetchall()]
+                
+                # Add very clear cached indicator
+                for item in local_data:
+                    item["cached"] = True
+                    item["warning"] = f"LOCAL DATA ONLY - Connection error"
+                
+                return local_data
+            except Exception as inner_e:
+                print(f"Error getting local fallback data: {inner_e}")
+                return []
     
-    def get_player_remote_stats(self, player_name: str) -> Dict[str, Any]:
+    def _refresh_server_data(self):
         """
-        Get a player's statistics from the remote server.
-        Returns empty stats if server is unreachable, to maintain isolation.
+        Refresh all server data at once to ensure client is in sync.
+        This fetches all leaderboard data for all difficulty levels.
         """
-        # Reset cached data flag
-        self.using_cached_data = False
-        
-        # Check server connection without syncing local data
-        if not self.online:
-            self.check_server_connection()
-        
-        if not self.online:
-            print("Cannot get remote player stats: Server is offline")
-            # If we have cached data, mark it and return it with a flag
-            self.cursor.execute('''
-                SELECT COUNT(*) FROM game_stats WHERE player_name = ?
-            ''', (player_name,))
+        # First check server connection to avoid unnecessary requests
+        if not self.online and not self.check_server_connection():
+            print("Server is offline - skipping data refresh")
+            return False
             
-            count = self.cursor.fetchone()[0]
-            if count > 0:
-                print(f"Using cached player stats for {player_name} (server offline)")
-                self.using_cached_data = True
-                # Get local data as fallback, with special flag
-                local_stats = super().get_player_stats(player_name)
-                return {
-                    "player": player_name, 
-                    "stats": local_stats,
-                    "cached": True
-                }
-            return {"player": player_name, "stats": []}  # No cached data
-        
         try:
-            # Add cache busting parameter to prevent browser/request caching
-            cache_buster = int(time.time() * 1000)  # Use milliseconds for more uniqueness
+            print("Refreshing all server data...")
+            # Fetch data for all difficulty levels
+            difficulties = ["Easy", "Medium", "Hard"]
             
-            # Construct API endpoint correctly, ensuring no double slashes
-            base_url = self.server_url.rstrip('/')
-            url = f"{base_url}/api/stats/player/{player_name}"
+            for difficulty in difficulties:
+                # Use a higher limit to ensure we get all relevant records
+                difficulty_param = difficulty if difficulty else "all"
+                
+                # Construct API endpoint correctly, ensuring no double slashes
+                base_url = self.server_url.rstrip('/')
+                url = f"{base_url}/api/stats/leaderboard/{difficulty_param}"
+                
+                # Add cache busting parameter
+                cache_buster = int(time.time() * 1000)
+                
+                print(f"Refreshing {difficulty} leaderboard from server...")
+                
+                # Strong cache-busting headers
+                headers = {
+                    'Cache-Control': 'no-cache, no-store, must-revalidate',
+                    'Pragma': 'no-cache',
+                    'Expires': '0'
+                }
+                
+                response = requests.get(
+                    url, 
+                    params={
+                        "limit": 100,  # High limit to get most data
+                        "t": cache_buster
+                    }, 
+                    headers=headers,
+                    timeout=10
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    leaderboard = data.get("leaderboard", [])
+                    print(f"Retrieved {len(leaderboard)} {difficulty} records from server")
+                    
+                    # Update local cache from server data
+                    self._update_local_cache_from_server(leaderboard, difficulty)
+                else:
+                    print(f"Failed to refresh {difficulty} data: {response.status_code}")
             
-            print(f"!!! Fetching fresh player stats from: {url}?t={cache_buster}")
+            return True
             
-            # Disable all caching mechanisms
-            headers = {
-                'Cache-Control': 'no-cache, no-store, must-revalidate',
-                'Pragma': 'no-cache',
-                'Expires': '0'
+        except Exception as e:
+            print(f"Error refreshing server data: {e}")
+            return False
+            
+    def _update_local_cache_from_server(self, server_data: List[Dict[str, Any]], difficulty: str = None) -> None:
+        """
+        Update local cache with latest server data.
+        This helps keep the local cache in sync with server data.
+        
+        Args:
+            server_data: List of records from the server
+            difficulty: The difficulty level for these records (for targeted clearing)
+        """
+        if not server_data:
+            return
+            
+        try:
+            # Begin transaction
+            self.conn.isolation_level = 'EXCLUSIVE'
+            self.conn.execute('BEGIN TRANSACTION')
+            
+            try:
+                # Clear existing server-sourced records for this difficulty
+                if difficulty:
+                    self.cursor.execute(
+                        "DELETE FROM game_stats WHERE source = 'server' AND difficulty = ?", 
+                        (difficulty,)
+                    )
+                else:
+                    # If no difficulty specified, clear all server records
+                    self.cursor.execute("DELETE FROM game_stats WHERE source = 'server'")
+                
+                # Then insert new records from server
+                inserted_count = 0
+                for item in server_data:
+                    # Skip if missing required fields
+                    if not all(k in item for k in ['player_name', 'difficulty', 'duration_seconds']):
+                        continue
+                        
+                    # Extract fields from server data
+                    player_name = item.get('player_name', 'Unknown')
+                    record_difficulty = item.get('difficulty', 'Medium') 
+                    duration = item.get('duration_seconds', 0)
+                    errors = item.get('errors', 0)
+                    
+                    # Only insert if it matches our target difficulty (if specified)
+                    if difficulty and record_difficulty != difficulty:
+                        continue
+                    
+                    # Calculate synthetic start/end times
+                    end_time = time.time()
+                    start_time = end_time - duration
+                    
+                    # Calculate moves and matches based on errors
+                    # This is an approximation since we don't know actual values
+                    matches = 10  # Assume standard board size
+                    moves = matches + errors
+                    
+                    # Insert as server-sourced record
+                    self.cursor.execute('''
+                        INSERT INTO game_stats 
+                        (player_name, difficulty, start_time, end_time, 
+                         duration_seconds, moves, matches, errors, completed, source)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 'server')
+                    ''', (player_name, record_difficulty, start_time, end_time, 
+                         duration, moves, matches, errors))
+                    
+                    inserted_count += 1
+                
+                # Commit changes
+                self.conn.commit()
+                print(f"Updated local cache with {inserted_count} server records for {difficulty or 'all'} difficulty")
+                
+            except Exception as inner_e:
+                # Rollback in case of error during processing
+                self.conn.rollback()
+                print(f"Error during server data processing, rolling back: {inner_e}")
+                raise inner_e
+                
+        except Exception as e:
+            print(f"Error updating local cache from server: {e}")
+            # Make sure transaction is ended
+            try:
+                self.conn.rollback()
+            except:
+                pass
+        finally:
+            # Reset isolation level
+            self.conn.isolation_level = None
+    
+    def get_player_remote_stats(self, player_name):
+        """
+        Get player stats from the remote server with fallback to local data.
+        
+        Args:
+            player_name: The name of the player
+            
+        Returns:
+            Dictionary containing player stats with consistent format:
+            {
+                "player": player_name,
+                "stats": [...],  # Primary stats list (server if available, local if not)
+                "local_stats": [...],  # Local-only stats when server available
+                "has_local_data": bool,  # Whether local-only data exists
+                "using_cached": bool,  # Whether we're using cached/offline data
+                "error": str or None  # Error message if any
             }
+        """
+        try:
+            if not self.online:
+                return self._get_local_only_stats(player_name, "Server unavailable")
             
-            response = requests.get(
-                url, 
-                params={"t": cache_buster},  # Cache busting parameter
-                headers=headers,
-                timeout=5
-            )
+            base_url = self.server_url.rstrip('/')
+            # Add cache-busting parameter to avoid stale data
+            cache_buster = int(time.time())
+            url = f"{base_url}/api/player/{player_name}?t={cache_buster}"
             
-            print(f"!!! Player stats response status: {response.status_code}")
+            try:
+                response = requests.get(url, timeout=5)
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                print(f"Connection error while getting remote player stats: {e}")
+                self.using_cached_data = True
+                return self._get_local_only_stats(player_name, f"Connection error: {e}")
             
             if response.status_code == 200:
-                data = response.json()
+                try:
+                    server_data = response.json()
+                except ValueError as e:
+                    print(f"Error parsing server response: {e}")
+                    return self._get_local_only_stats(player_name, f"Invalid server response: {e}")
                 
-                # If server returned empty stats but we have local records,
-                # this might indicate a server reset
-                if not data.get("stats", []):
-                    self.cursor.execute('''
-                        SELECT COUNT(*) FROM game_stats WHERE player_name = ?
-                    ''', (player_name,))
-                    
-                    local_count = self.cursor.fetchone()[0]
-                    if local_count > 0:
-                        print(f"Warning: Server returned empty data for {player_name} but local cache exists")
-                        print("This may indicate a server reset")
-                        # We'll return the server data, but could offer reset option
+                # Get local-only data (source='local') for this player
+                query = '''
+                    SELECT id, player_name, difficulty, start_time, end_time, 
+                           duration_seconds, moves, matches, errors, completed, source
+                    FROM game_stats 
+                    WHERE player_name = ? AND source = 'local'
+                '''
                 
-                return data
-            else:
-                print(f"Error getting remote player stats: {response.status_code}")
-                # If server error, use cached data as fallback
-                print(f"Using cached stats for {player_name} (server error)")
-                self.using_cached_data = True
-                local_stats = super().get_player_stats(player_name)
+                self.cursor.execute(query, (player_name,))
+                local_records = self.cursor.fetchall()
+                
+                local_stats = []
+                for record in local_records:
+                    stat_dict = {
+                        "id": record[0],
+                        "player_name": record[1],
+                        "difficulty": record[2],
+                        "start_time": record[3],
+                        "end_time": record[4],
+                        "duration_seconds": record[5],
+                        "moves": record[6],
+                        "matches": record[7],
+                        "errors": record[8],
+                        "completed": bool(record[9]),
+                        "source": record[10],
+                        "local": True
+                    }
+                    local_stats.append(stat_dict)
+                
+                # Mark server stats
+                server_stats = server_data.get("stats", [])
+                for stat in server_stats:
+                    stat["server"] = True
+                
+                # Create combined data structure with consistent format
                 return {
                     "player": player_name,
-                    "stats": local_stats,
-                    "cached": True
+                    "stats": server_stats,  # Use server data as primary 
+                    "local_stats": local_stats,  # Include local stats separately
+                    "has_local_data": len(local_stats) > 0,
+                    "using_cached": False,
+                    "error": None
                 }
+            else:
+                print(f"Error getting remote player stats: {response.status_code}")
+                return self._get_local_only_stats(player_name, f"Server error: {response.status_code}")
                 
         except Exception as e:
             print(f"Failed to get remote player stats: {e}")
-            # If exception, use cached data as fallback
-            print(f"Using cached stats for {player_name} (exception)")
-            self.using_cached_data = True
-            local_stats = super().get_player_stats(player_name)
-            return {
-                "player": player_name,
-                "stats": local_stats,
+            return self._get_local_only_stats(player_name, f"Error: {e}")
+            
+    def _get_local_only_stats(self, player_name, error_message):
+        """
+        Helper method to get local-only stats with consistent return format.
+        
+        Args:
+            player_name: The name of the player
+            error_message: Error message to include
+            
+        Returns:
+            Dictionary with local stats in the same format as remote stats
+        """
+        self.using_cached_data = True
+        print(f"Using local-only stats for {player_name} ({error_message})")
+        
+        # Only get local data
+        query = '''
+            SELECT id, player_name, difficulty, start_time, end_time, 
+                   duration_seconds, moves, matches, errors, completed, source
+            FROM game_stats 
+            WHERE player_name = ? AND source = 'local'
+        '''
+        
+        self.cursor.execute(query, (player_name,))
+        records = self.cursor.fetchall()
+        
+        stats = []
+        for record in records:
+            stat_dict = {
+                "id": record[0],
+                "player_name": record[1],
+                "difficulty": record[2],
+                "start_time": record[3],
+                "end_time": record[4],
+                "duration_seconds": record[5],
+                "moves": record[6],
+                "matches": record[7],
+                "errors": record[8],
+                "completed": bool(record[9]),
+                "source": record[10],
+                "local": True,
                 "cached": True
             }
+            stats.append(stat_dict)
+        
+        return {
+            "player": player_name,
+            "stats": stats,
+            "local_stats": [],  # Empty since all stats are already in the main list
+            "has_local_data": True,  # All data is local
+            "using_cached": True,
+            "error": error_message
+        }
     
     def force_sync_all(self):
         """

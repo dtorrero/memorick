@@ -39,7 +39,26 @@ class RemoteStatsGameGUI(GameGUI):
         """
         Override the original stats screen to show both local and global leaderboards.
         """
-        db = get_sync_database()  # Get the syncing database
+        # Show loading indicator while fetching data
+        self.screen.fill(WHITE)
+        loading_text = FONT_MEDIUM.render("Loading statistics...", True, BLUE)
+        self.screen.blit(loading_text, (self.width // 2 - loading_text.get_width() // 2, self.height // 2 - loading_text.get_height() // 2))
+        pygame.display.flip()
+        
+        # Get the syncing database and force a refresh of data when the screen is opened
+        db = get_sync_database()
+        
+        # Always attempt to refresh data when opening the screen
+        if db.online or db.check_server_connection():
+            try:
+                print("Force refreshing server data on stats screen open")
+                # This will update the local cache with the latest server data
+                db._refresh_server_data()
+            except Exception as e:
+                print(f"Error refreshing data when opening stats screen: {e}")
+        else:
+            print("Server offline - using cached data")
+        
         self.screen.fill(WHITE)
         
         # Title
@@ -79,7 +98,7 @@ class RemoteStatsGameGUI(GameGUI):
         show_remote = True  # Default to showing remote data
         
         # Back button
-        back_rect = pygame.Rect(self.width // 2 - 100, 520, 200, 50)
+        back_rect = pygame.Rect(self.width // 2 - 120, 520, 240, 50)
         
         # Main loop for stats screen
         running = True
@@ -175,10 +194,20 @@ class RemoteStatsGameGUI(GameGUI):
                         str(entry["errors"])
                     ]
                     
+                    # Determine row color based on whether this is cached data
+                    row_color = BLACK
+                    if entry.get("cached", False):
+                        row_color = (180, 0, 0)  # Red for cached entries
+                    
                     for j, data in enumerate(row_data):
-                        data_text = FONT_SMALL.render(data, True, BLACK)
+                        data_text = FONT_SMALL.render(data, True, row_color)
                         self.screen.blit(data_text, (row_x, row_y))
                         row_x += header_widths[j]
+                
+                # Show warning if using cached data
+                if any(entry.get("cached", False) for entry in leaderboard_data):
+                    warning_text = FONT_SMALL.render("⚠ Showing cached data - Data loaded when you last opened this screen", True, (180, 0, 0))
+                    self.screen.blit(warning_text, (self.width // 2 - warning_text.get_width() // 2, 410))
             else:
                 no_data_text = FONT_MEDIUM.render("No games played yet!", True, GRAY)
                 self.screen.blit(no_data_text, (self.width // 2 - no_data_text.get_width() // 2, 280))
@@ -189,12 +218,39 @@ class RemoteStatsGameGUI(GameGUI):
                 if show_remote:
                     player_data = db.get_player_remote_stats(self.player_name)
                     player_stats = player_data.get("stats", [])
+                    local_only_stats = player_data.get("local_stats", [])
+                    using_cached = player_data.get("using_cached", False)
+                    has_local_data = player_data.get("has_local_data", False)
+                    error_message = player_data.get("error", None)
                 else:
                     player_stats = db.get_player_stats(self.player_name)
+                    local_only_stats = []
+                    using_cached = False
+                    has_local_data = True
+                    error_message = None
                 
                 # Filter stats for the selected difficulty
                 current_difficulty = tabs[selected_tab]["name"]
                 difficulty_stats = [stat for stat in player_stats if stat["difficulty"] == current_difficulty]
+                
+                # Create status text with connection information
+                source_text = source
+                if using_cached:
+                    source_text += " (Offline Mode)"
+                    status_color = (255, 140, 0)  # Orange for offline mode
+                elif show_remote and has_local_data and local_only_stats:
+                    source_text += " + Local"
+                    status_color = GREEN  # Green for online with local data
+                elif show_remote:
+                    status_color = GREEN  # Green for online
+                else:
+                    status_color = BLUE  # Blue for local-only view
+                
+                # Display connection error if present
+                if error_message and show_remote:
+                    error_y = 350
+                    error_text = FONT_SMALL.render(f"Connection Status: {error_message}", True, (180, 0, 0))
+                    self.screen.blit(error_text, (self.width // 2 - error_text.get_width() // 2, error_y))
                 
                 if difficulty_stats:
                     # Calculate filtered stats for the selected difficulty
@@ -209,7 +265,7 @@ class RemoteStatsGameGUI(GameGUI):
                     
                     # Player stats section
                     stats_y = 380
-                    stats_title = FONT_MEDIUM.render(f"Your {source} {current_difficulty} Stats: {self.player_name}", True, GREEN)
+                    stats_title = FONT_MEDIUM.render(f"Your {source_text} {current_difficulty} Stats: {self.player_name}", True, status_color)
                     self.screen.blit(stats_title, (self.width // 2 - stats_title.get_width() // 2, stats_y))
                     
                     stats_text = [
@@ -222,19 +278,42 @@ class RemoteStatsGameGUI(GameGUI):
                     for i, text in enumerate(stats_text):
                         stat_text = FONT_SMALL.render(text, True, BLACK)
                         self.screen.blit(stat_text, (self.width // 2 - stat_text.get_width() // 2, stats_y + 40 + i * 25))
+                    
+                    # Show local-only stats count if available
+                    if show_remote and local_only_stats:
+                        local_difficulty_stats = [stat for stat in local_only_stats if stat["difficulty"] == current_difficulty]
+                        if local_difficulty_stats:
+                            local_text = FONT_SMALL.render(f"Additional local-only games: {len(local_difficulty_stats)}", True, BLUE)
+                            self.screen.blit(local_text, (self.width // 2 - local_text.get_width() // 2, stats_y + 70))
                 else:
                     # No stats for this difficulty
                     stats_y = 380
-                    stats_title = FONT_MEDIUM.render(f"Your {source} {current_difficulty} Stats: {self.player_name}", True, GREEN)
+                    stats_title = FONT_MEDIUM.render(f"Your {source_text} {current_difficulty} Stats: {self.player_name}", True, status_color)
                     self.screen.blit(stats_title, (self.width // 2 - stats_title.get_width() // 2, stats_y))
                     
                     no_stats = FONT_SMALL.render(f"No games played on {current_difficulty} difficulty", True, GRAY)
                     self.screen.blit(no_stats, (self.width // 2 - no_stats.get_width() // 2, stats_y + 40))
+                    
+                    # Show local-only stats count if available
+                    if show_remote and local_only_stats:
+                        local_difficulty_stats = [stat for stat in local_only_stats if stat["difficulty"] == current_difficulty]
+                        if local_difficulty_stats:
+                            local_text = FONT_SMALL.render(f"Additional local-only games: {len(local_difficulty_stats)}", True, BLUE)
+                            self.screen.blit(local_text, (self.width // 2 - local_text.get_width() // 2, stats_y + 70))
             
             # Draw connection status
+            try:
+                RED = (255, 0, 0)
+            except:
+                RED = (180, 0, 0)  # Fallback if RED is not defined
+                
             status_color = GREEN if db.online else RED
             status_text = FONT_SMALL.render(f"Server: {'Online' if db.online else 'Offline'}", True, status_color)
             self.screen.blit(status_text, (10, 10))
+            
+            # Draw last update time
+            update_time = FONT_SMALL.render("Data updated: Just now", True, GRAY if db.online else RED)
+            self.screen.blit(update_time, (self.width - update_time.get_width() - 10, 10))
             
             # Draw back button
             button_color = GREEN if back_rect.collidepoint(mouse_pos) else (100, 200, 100)
@@ -242,7 +321,7 @@ class RemoteStatsGameGUI(GameGUI):
             pygame.draw.rect(self.screen, BLACK, back_rect, 2, 10)
             
             # Use smaller font for back button to avoid text touching border
-            back_text = FONT_SMALL.render("Back to Menu", True, WHITE)
+            back_text = FONT_MEDIUM.render("Back to Menu", True, WHITE)
             self.screen.blit(back_text, (back_rect.centerx - back_text.get_width() // 2, 
                                        back_rect.centery - back_text.get_height() // 2))
             
