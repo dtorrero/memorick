@@ -1,2 +1,5 @@
 pygame==2.5.2
+requests==2.31.0
+# Optional for memory monitoring
+psutil==5.9.5
 # SQLite is included in the Python standard library 
