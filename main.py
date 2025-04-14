@@ -1335,6 +1335,10 @@ class GameGUI:
         # Start the game
         self.game.start_game()
         
+        # Store the current grid dimensions for potential replay
+        self.current_rows = self.game.board.rows
+        self.current_cols = self.game.board.cols
+        
         # For 10x10 grid, adjust the UI to make room
         rows = self.game.board.rows
         if rows == 10:
@@ -1451,7 +1455,7 @@ class GameGUI:
                                 if result:
                                     # Play again with same difficulty
                                     # End this game session and start a new one
-                                    self.game = Game(rows=rows, cols=cols, player_name=self.player_name)
+                                    self.game = Game(rows=self.current_rows, cols=self.current_cols, player_name=self.player_name)
                                     self.game.start_game()
                                     
                                     # Reset game session variables
@@ -1504,7 +1508,7 @@ class GameGUI:
                     if result:
                         # Play again with same difficulty
                         # End this game session and start a new one
-                        self.game = Game(rows=rows, cols=cols, player_name=self.player_name)
+                        self.game = Game(rows=self.current_rows, cols=self.current_cols, player_name=self.player_name)
                         self.game.start_game()
                         
                         # Reset game session variables
